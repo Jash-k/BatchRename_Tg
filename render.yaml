@@ -1,11 +1,11 @@
 services:
   - type: web
-    name: telegram-file-renamer
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    plan: free
+    name: telegram-renamer
+    env: python
+    buildCommand: npm install && npm run build && pip install -r requirements.txt
+    startCommand: uvicorn server.main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: PORT
-        value: 8000
-    healthCheckPath: /api/health
-    autoDeploy: true
+      - key: PYTHON_VERSION
+        value: 3.9.0
+      - key: NODE_VERSION
+        value: 18.0.0
