@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { cn } from "@/utils/cn";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type Tab = "setup" | "mapping" | "run" | "guide";
 type JobStatus = "idle" | "starting" | "scanning" | "renaming" | "done" | "error";
 
@@ -14,29 +13,24 @@ interface JobState {
   error: string | null;
   needsOtp: boolean;
   sessionString: string | null;
+  renamed: number;
+  failed: number;
+  notFound: number;
 }
 
-// ─── API Base URL ─────────────────────────────────────────────────────────────
 const API =
   import.meta.env.VITE_API_URL ||
   (typeof window !== "undefined" && window.location.origin !== "null"
     ? window.location.origin
     : "http://localhost:8000");
 
-// ─── Utility Components ───────────────────────────────────────────────────────
 function CopyBtn({ text, label = "Copy" }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className={cn(
-        "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-        copied ? "bg-emerald-500 text-white" : "bg-slate-700 text-slate-200 hover:bg-slate-600"
-      )}
+      onClick={() => { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+      className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+        copied ? "bg-emerald-500 text-white" : "bg-slate-700 text-slate-200 hover:bg-slate-600")}
     >
       {copied ? "✓ Copied!" : `⎘ ${label}`}
     </button>
@@ -44,11 +38,7 @@ function CopyBtn({ text, label = "Copy" }: { text: string; label?: string }) {
 }
 
 function Badge({ children, color }: { children: React.ReactNode; color: string }) {
-  return (
-    <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", color)}>
-      {children}
-    </span>
-  );
+  return <span className={cn("inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold", color)}>{children}</span>;
 }
 
 function CodeBlock({ code, lang = "bash" }: { code: string; lang?: string }) {
@@ -58,9 +48,7 @@ function CodeBlock({ code, lang = "bash" }: { code: string; lang?: string }) {
         <span className="text-xs text-slate-400 font-mono">{lang}</span>
         <CopyBtn text={code} />
       </div>
-      <pre className="bg-slate-900 px-4 py-3 text-sm text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap">
-        {code}
-      </pre>
+      <pre className="bg-slate-900 px-4 py-3 text-sm text-emerald-400 font-mono overflow-x-auto whitespace-pre-wrap">{code}</pre>
     </div>
   );
 }
@@ -74,13 +62,7 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
         <span>{pct}%</span>
       </div>
       <div className="h-3 rounded-full bg-slate-200 overflow-hidden">
-        <div
-          className={cn(
-            "h-full rounded-full transition-all duration-500",
-            pct === 100 ? "bg-emerald-500" : "bg-violet-500"
-          )}
-          style={{ width: `${pct}%` }}
-        />
+        <div className={cn("h-full rounded-full transition-all duration-500", pct === 100 ? "bg-emerald-500" : "bg-violet-500")} style={{ width: `${pct}%` }} />
       </div>
     </div>
   );
@@ -88,13 +70,9 @@ function ProgressBar({ value, max }: { value: number; max: number }) {
 
 // ─── Tab: Setup ───────────────────────────────────────────────────────────────
 function SetupTab({
-  apiId, setApiId,
-  apiHash, setApiHash,
-  phone, setPhone,
-  srcChannel, setSrcChannel,
-  dstChannel, setDstChannel,
-  deleteFromSrc, setDeleteFromSrc,
-  sessionString, setSessionString,
+  apiId, setApiId, apiHash, setApiHash, phone, setPhone,
+  srcChannel, setSrcChannel, dstChannel, setDstChannel,
+  deleteFromSrc, setDeleteFromSrc, sessionString, setSessionString,
 }: {
   apiId: string; setApiId: (v: string) => void;
   apiHash: string; setApiHash: (v: string) => void;
@@ -115,85 +93,54 @@ function SetupTab({
         </ol>
       </div>
 
-      {/* API Credentials */}
       <div>
         <h3 className="text-sm font-bold text-slate-600 uppercase tracking-wider mb-3">🔐 API Credentials</h3>
         <div className="grid gap-4 sm:grid-cols-2">
           {[
             { label: "API ID", val: apiId, set: setApiId, placeholder: "e.g. 12345678", type: "text" },
-            { label: "API Hash", val: apiHash, set: setApiHash, placeholder: "e.g. a1b2c3d4e5f6a1b2c3d4e5f6", type: "text" },
+            { label: "API Hash", val: apiHash, set: setApiHash, placeholder: "e.g. a1b2c3d4e5f6...", type: "text" },
             { label: "Phone Number (with country code)", val: phone, set: setPhone, placeholder: "e.g. +919876543210", type: "tel" },
           ].map(({ label, val, set, placeholder, type }) => (
             <div key={label}>
               <label className="block text-sm font-semibold text-slate-700 mb-1">{label}</label>
-              <input
-                type={type}
-                value={val}
-                onChange={e => set(e.target.value)}
-                placeholder={placeholder}
-                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400"
-              />
+              <input type={type} value={val} onChange={e => set(e.target.value)} placeholder={placeholder}
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400" />
             </div>
           ))}
         </div>
       </div>
 
-      {/* Channel Config */}
       <div>
         <h3 className="text-sm font-bold text-slate-600 uppercase tracking-wider mb-3">📡 Channel Configuration</h3>
         <div className="grid gap-4 sm:grid-cols-2">
-          {/* Source Channel */}
           <div className="rounded-xl border-2 border-red-200 bg-red-50 p-4">
             <label className="block text-sm font-bold text-red-700 mb-1">
               📥 Source Channel
               <span className="ml-1 font-normal text-red-500 text-xs">(where files currently are)</span>
             </label>
-            <input
-              type="text"
-              value={srcChannel}
-              onChange={e => setSrcChannel(e.target.value)}
+            <input type="text" value={srcChannel} onChange={e => setSrcChannel(e.target.value)}
               placeholder="@animesaga  or  -1003557121488  or  t.me/animesaga"
-              className="w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 font-mono"
-            />
-            <div className="mt-2 space-y-1">
-              <p className="text-xs text-red-600">Files are <strong>scanned</strong> from here</p>
-              <div className="rounded-lg bg-red-100 border border-red-200 px-2 py-1.5 text-xs text-red-700 space-y-0.5">
-                <p className="font-semibold">✅ Accepted formats:</p>
-                <p className="font-mono">@channelname</p>
-                <p className="font-mono">-1003557121488 &nbsp;<span className="font-sans font-normal text-red-500">(numeric ID with -100 prefix)</span></p>
-                <p className="font-mono">t.me/channelname</p>
-                <p className="font-semibold mt-1">💡 Don't know the ID? <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline">Forward a message to @userinfobot</a></p>
-              </div>
+              className="w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 font-mono" />
+            <div className="mt-2 rounded-lg bg-red-100 border border-red-200 px-2 py-1.5 text-xs text-red-700 space-y-0.5">
+              <p className="font-semibold">✅ Accepted: @username · -1003557121488 · t.me/channel</p>
+              <p>💡 <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline font-semibold">Forward a msg to @userinfobot</a> to get the exact ID</p>
             </div>
           </div>
-
-          {/* Destination Channel */}
           <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
             <label className="block text-sm font-bold text-emerald-700 mb-1">
               📤 Destination Channel
               <span className="ml-1 font-normal text-emerald-500 text-xs">(where renamed files go)</span>
             </label>
-            <input
-              type="text"
-              value={dstChannel}
-              onChange={e => setDstChannel(e.target.value)}
+            <input type="text" value={dstChannel} onChange={e => setDstChannel(e.target.value)}
               placeholder="@mahabharat_hd  or  -1001234567890  or  t.me/mahabharat"
-              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 font-mono"
-            />
-            <div className="mt-2 space-y-1">
-              <p className="text-xs text-emerald-600">Renamed files are <strong>sent</strong> here</p>
-              <div className="rounded-lg bg-emerald-100 border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 space-y-0.5">
-                <p className="font-semibold">✅ Accepted formats:</p>
-                <p className="font-mono">@channelname</p>
-                <p className="font-mono">-1001234567890 &nbsp;<span className="font-sans font-normal text-emerald-600">(numeric ID with -100 prefix)</span></p>
-                <p className="font-mono">t.me/channelname</p>
-                <p className="font-semibold mt-1">💡 Must be <strong>admin</strong> of this channel to post files</p>
-              </div>
+              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 font-mono" />
+            <div className="mt-2 rounded-lg bg-emerald-100 border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 space-y-0.5">
+              <p className="font-semibold">✅ Accepted: @username · -1001234567890 · t.me/channel</p>
+              <p>💡 Must be <strong>admin</strong> of this channel to post files</p>
             </div>
           </div>
         </div>
 
-        {/* Flow diagram */}
         <div className="mt-3 flex items-center justify-center gap-3 py-3 bg-slate-50 rounded-xl border border-slate-200">
           <div className="flex flex-col items-center">
             <span className="text-2xl">📥</span>
@@ -202,7 +149,7 @@ function SetupTab({
           </div>
           <div className="flex flex-col items-center gap-0.5 text-slate-400 text-xs text-center">
             <span className="text-lg">→</span>
-            <span className="font-mono bg-violet-100 text-violet-700 px-2 py-0.5 rounded text-xs">rename</span>
+            <span className="font-mono bg-violet-100 text-violet-700 px-2 py-0.5 rounded text-xs">chunk-stream rename</span>
             <span className="text-lg">→</span>
           </div>
           <div className="flex flex-col items-center">
@@ -212,20 +159,10 @@ function SetupTab({
           </div>
         </div>
 
-        {/* Delete from source toggle */}
         <div className="mt-3 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <button
-            type="button"
-            onClick={() => setDeleteFromSrc(!deleteFromSrc)}
-            className={cn(
-              "relative flex-shrink-0 mt-0.5 h-6 w-11 rounded-full transition-colors duration-200 focus:outline-none",
-              deleteFromSrc ? "bg-red-500" : "bg-slate-300"
-            )}
-          >
-            <span className={cn(
-              "absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200",
-              deleteFromSrc ? "translate-x-5" : "translate-x-0"
-            )} />
+          <button type="button" onClick={() => setDeleteFromSrc(!deleteFromSrc)}
+            className={cn("relative flex-shrink-0 mt-0.5 h-6 w-11 rounded-full transition-colors duration-200 focus:outline-none", deleteFromSrc ? "bg-red-500" : "bg-slate-300")}>
+            <span className={cn("absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform duration-200", deleteFromSrc ? "translate-x-5" : "translate-x-0")} />
           </button>
           <div>
             <p className="text-sm font-semibold text-amber-800">
@@ -235,37 +172,29 @@ function SetupTab({
               </span>
             </p>
             <p className="text-xs text-amber-700 mt-0.5">
-              {deleteFromSrc
-                ? "⚠️ Source files will be deleted after successful rename — you must be an admin of the source channel"
-                : "✅ Source files will be kept — renamed copies go to destination only"}
+              {deleteFromSrc ? "⚠️ Source files deleted after successful rename" : "✅ Source files kept — only copies go to destination"}
             </p>
           </div>
         </div>
       </div>
 
-      {/* Session String */}
       <div>
         <label className="block text-sm font-semibold text-slate-700 mb-1">
           Session String <span className="text-slate-400 font-normal">(optional — paste from a previous run to skip OTP)</span>
         </label>
-        <textarea
-          value={sessionString}
-          onChange={e => setSessionString(e.target.value)}
-          rows={3}
+        <textarea value={sessionString} onChange={e => setSessionString(e.target.value)} rows={3}
           placeholder="Paste your Telethon StringSession here to skip OTP on future runs..."
-          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
-        />
+          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none" />
       </div>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-        <p className="font-bold mb-2">⚠️ Important Notes</p>
-        <ul className="list-disc ml-4 space-y-1 text-slate-600">
-          <li>Files are renamed via <strong>RAM-stream</strong> — downloaded to server RAM, re-uploaded with new name. No disk used. This is how all Telegram rename bots work.</li>
-          <li>You must be a <strong>member</strong> of the source channel to read files</li>
-          <li>You must be an <strong>admin</strong> of the destination channel to post files</li>
-          <li>If <em>Delete from Source</em> is ON, you must also be an <strong>admin</strong> of the source channel</li>
-          <li>After the job, save the <strong>session string</strong> shown in Run tab to skip OTP next time</li>
-          <li>For large files (1GB+), the Render <strong>Starter plan</strong> ($7/mo) is recommended over the free tier</li>
+        <p className="font-bold mb-2">⚠️ v8 Important Notes</p>
+        <ul className="list-disc ml-4 space-y-1.5 text-slate-600 text-xs">
+          <li><strong>How it works:</strong> Files are streamed in 512 KB chunks — download chunk → write to buffer → upload. Peak RAM = 512 KB regardless of file size. Files &gt;400 MB go via <code className="bg-slate-200 px-0.5 rounded">/tmp</code> disk to avoid OOM.</li>
+          <li><strong>Filename guaranteed:</strong> <code className="bg-slate-200 px-0.5 rounded">send_file(file_name=NEW_NAME)</code> — 100% applied every time.</li>
+          <li><strong>Resume support:</strong> If the server restarts mid-job, paste your session string and re-run. Already-completed files are skipped.</li>
+          <li>You must be a <strong>member</strong> of source + <strong>admin</strong> of destination channel</li>
+          <li>Render <strong>free tier</strong> works for files ≤400 MB. For 1 GB+ files, <strong>Starter plan ($7/mo)</strong> is recommended for the extra disk space.</li>
         </ul>
       </div>
     </div>
@@ -273,10 +202,7 @@ function SetupTab({
 }
 
 // ─── Tab: Mapping ─────────────────────────────────────────────────────────────
-function MappingTab({
-  oldNames, setOldNames,
-  newNames, setNewNames,
-}: {
+function MappingTab({ oldNames, setOldNames, newNames, setNewNames }: {
   oldNames: string; setOldNames: (v: string) => void;
   newNames: string; setNewNames: (v: string) => void;
 }) {
@@ -308,25 +234,17 @@ function MappingTab({
           <label className="block text-sm font-semibold text-slate-700 mb-1">
             Old Filenames <span className="text-slate-400 font-normal">({oldLines.length} lines)</span>
           </label>
-          <textarea
-            value={oldNames}
-            onChange={e => setOldNames(e.target.value)}
-            rows={15}
-            placeholder={"[AnimeSaga]- MahabharathamEpisode 1 [AS].mkv\n[AnimeSaga]- MahabharathamEpisode 2 [AS].mkv\n[AnimeSaga]- MahabharathamEpisode 3 [AS].mkv\n..."}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
-          />
+          <textarea value={oldNames} onChange={e => setOldNames(e.target.value)} rows={15}
+            placeholder={"[AnimeSaga]- MahabharathamEpisode 1 [AS].mkv\n[AnimeSaga]- MahabharathamEpisode 2 [AS].mkv\n..."}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none" />
         </div>
         <div>
           <label className="block text-sm font-semibold text-slate-700 mb-1">
             New Filenames <span className="text-slate-400 font-normal">({newLines.length} lines)</span>
           </label>
-          <textarea
-            value={newNames}
-            onChange={e => setNewNames(e.target.value)}
-            rows={15}
-            placeholder={"Mahabharat.2013.S01E001.Shantanu.Accepts.Bheeshm.As.Son.1080p.WEB-DL.JaSH.mkv\nMahabharat.2013.S01E002.Title.Here.1080p.WEB-DL.JaSH.mkv\nMahabharat.2013.S01E003.Title.Here.1080p.WEB-DL.JaSH.mkv\n..."}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none"
-          />
+          <textarea value={newNames} onChange={e => setNewNames(e.target.value)} rows={15}
+            placeholder={"Mahabharat.2013.S01E001.Shantanu.Accepts.Bheeshm.As.Son.1080p.WEB-DL.JaSH.mkv\nMahabharat.2013.S01E002.Title.Here.1080p.WEB-DL.JaSH.mkv\n..."}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-400 resize-none" />
         </div>
       </div>
 
@@ -367,152 +285,114 @@ function MappingTab({
 }
 
 // ─── Tab: Run ─────────────────────────────────────────────────────────────────
-function RunTab({
-  job, mappingCount, ready,
-  onStart, onSubmitOtp, otp, setOtp,
-  srcChannel, dstChannel, deleteFromSrc,
-}: {
-  job: JobState;
-  mappingCount: number;
-  ready: boolean;
-  onStart: () => void;
-  onSubmitOtp: () => void;
-  otp: string;
-  setOtp: (v: string) => void;
-  srcChannel: string;
-  dstChannel: string;
-  deleteFromSrc: boolean;
+function RunTab({ job, mappingCount, ready, onStart, onSubmitOtp, otp, setOtp, srcChannel, dstChannel, deleteFromSrc }: {
+  job: JobState; mappingCount: number; ready: boolean;
+  onStart: () => void; onSubmitOtp: () => void;
+  otp: string; setOtp: (v: string) => void;
+  srcChannel: string; dstChannel: string; deleteFromSrc: boolean;
 }) {
   const logsRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (logsRef.current) {
-      logsRef.current.scrollTop = logsRef.current.scrollHeight;
-    }
-  }, [job.logs]);
-
-  // Channel flow info bar
-  const channelBar = srcChannel && dstChannel ? (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 flex flex-wrap items-center gap-2 text-xs">
-      <span className="flex items-center gap-1.5 rounded-lg bg-red-100 text-red-700 px-3 py-1.5 font-semibold">
-        📥 {srcChannel}
-      </span>
-      <span className="text-slate-400 font-bold">→ rename →</span>
-      <span className="flex items-center gap-1.5 rounded-lg bg-emerald-100 text-emerald-700 px-3 py-1.5 font-semibold">
-        📤 {dstChannel}
-      </span>
-      {deleteFromSrc && (
-        <span className="rounded-lg bg-amber-100 text-amber-700 px-2 py-1 font-semibold">
-          🗑️ delete source
-        </span>
-      )}
-    </div>
-  ) : null;
+  useEffect(() => { if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight; }, [job.logs]);
 
   const statusColor: Record<JobStatus, string> = {
-    idle: "bg-slate-100 text-slate-600",
-    starting: "bg-blue-100 text-blue-700",
-    scanning: "bg-amber-100 text-amber-700",
-    renaming: "bg-violet-100 text-violet-700",
-    done: "bg-emerald-100 text-emerald-700",
-    error: "bg-red-100 text-red-700",
+    idle: "bg-slate-100 text-slate-600", starting: "bg-blue-100 text-blue-700",
+    scanning: "bg-amber-100 text-amber-700", renaming: "bg-violet-100 text-violet-700",
+    done: "bg-emerald-100 text-emerald-700", error: "bg-red-100 text-red-700",
   };
-
   const statusLabel: Record<JobStatus, string> = {
-    idle: "⏸ Idle",
-    starting: "🔄 Starting...",
-    scanning: "🔍 Scanning Messages",
-    renaming: "✏️ Renaming Files",
-    done: "✅ Done!",
-    error: "❌ Error",
+    idle: "⏸ Idle", starting: "🔄 Starting...", scanning: "🔍 Scanning",
+    renaming: "✏️ Renaming", done: "✅ Done!", error: "❌ Error",
   };
 
   return (
     <div className="space-y-5">
 
-      {/* v7 Fix Banner */}
+      {/* v8 Banner */}
       <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
-        <p className="font-bold text-emerald-800 text-sm mb-1">🔧 v7 — Filename Rename: RAM-Stream Method (Guaranteed Fix)</p>
-        <div className="text-xs text-emerald-700 space-y-2">
-          <div className="rounded-lg bg-red-50 border border-red-200 p-2 text-red-700">
-            <p className="font-bold mb-1">❌ Why previous versions failed:</p>
-            <p><strong>v4:</strong> <code className="bg-red-100 px-1 rounded font-mono">send_file(file=doc, attributes=[...])</code> — Telethon ignores <code className="bg-red-100 px-1 rounded font-mono">attributes</code> when file is a Document. Old name unchanged.</p>
-            <p className="mt-1"><strong>v5/v6:</strong> <code className="bg-red-100 px-1 rounded font-mono">SendMediaRequest(attributes=[...])</code> / mutate doc.attributes — MTProto's <code className="bg-red-100 px-1 rounded font-mono">InputMediaDocument</code> has NO attributes field. Telegram ignores it. Old name unchanged.</p>
-            <p className="mt-1 font-bold text-red-800">Root Truth: Telegram's MTProto API has NO way to rename a file in-place. The InputMediaDocument type does not support attribute overrides.</p>
+        <p className="font-bold text-emerald-800 text-sm mb-2">🔧 v8 — Chunk-Pipe Streaming (OOM Fix + Filename Guaranteed)</p>
+        <div className="grid gap-2 sm:grid-cols-2 text-xs">
+          <div className="rounded-lg bg-red-50 border border-red-200 p-2.5 text-red-700">
+            <p className="font-bold mb-1">❌ Why v7 crashed on 1GB files:</p>
+            <p>v7 loaded the full file into <code className="bg-red-100 px-0.5 rounded font-mono">io.BytesIO()</code> — a 1 GB episode fills 1 GB RAM. Render free tier = 512 MB RAM → OOM crash → job lost → no files renamed.</p>
           </div>
-          <div className="rounded-lg bg-emerald-100 border border-emerald-200 p-2">
-            <p className="font-bold mb-1">✅ v7 Real Fix — RAM-Stream Rename:</p>
-            <p>1. <strong>Download</strong> file from source channel → <code className="bg-emerald-200 px-1 rounded font-mono">io.BytesIO()</code> RAM buffer (no disk)</p>
-            <p className="mt-0.5">2. <strong>Upload</strong> from RAM buffer to destination with <code className="bg-emerald-200 px-1 rounded font-mono">file_name=NEW_NAME</code></p>
-            <p className="mt-0.5">3. No disk I/O — file lives only in server RAM during transfer</p>
-            <p className="mt-0.5 font-bold">This is how ALL Telegram rename bots actually work internally. 100% filename guaranteed. ✅</p>
+          <div className="rounded-lg bg-emerald-100 border border-emerald-200 p-2.5 text-emerald-800">
+            <p className="font-bold mb-1">✅ v8 Fix — 512 KB chunk streaming:</p>
+            <p>📦 ≤400 MB → chunks to RAM (peak = 512 KB, not 1 GB)</p>
+            <p>💾 &gt;400 MB → chunks to <code className="bg-emerald-200 px-0.5 rounded font-mono">/tmp</code> disk → upload</p>
+            <p>📊 Real-time MB/s + % progress in logs per file</p>
+            <p>♻️ Resume: completed files skipped on re-run</p>
           </div>
         </div>
       </div>
 
       {/* Channel flow bar */}
-      {channelBar}
+      {srcChannel && dstChannel && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 flex flex-wrap items-center gap-2 text-xs">
+          <span className="flex items-center gap-1.5 rounded-lg bg-red-100 text-red-700 px-3 py-1.5 font-semibold">📥 {srcChannel}</span>
+          <span className="text-slate-400 font-bold">→ chunk-stream rename →</span>
+          <span className="flex items-center gap-1.5 rounded-lg bg-emerald-100 text-emerald-700 px-3 py-1.5 font-semibold">📤 {dstChannel}</span>
+          {deleteFromSrc && <span className="rounded-lg bg-amber-100 text-amber-700 px-2 py-1 font-semibold">🗑️ delete source</span>}
+        </div>
+      )}
 
-      {/* Status bar */}
+      {/* Status */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <Badge color={statusColor[job.status]}>{statusLabel[job.status]}</Badge>
-          {job.jobId && (
-            <span className="text-xs text-slate-400 font-mono">Job: {job.jobId.slice(0, 8)}</span>
+          {job.jobId && <span className="text-xs text-slate-400 font-mono">Job: {job.jobId.slice(0, 8)}</span>}
+          {job.status === "renaming" && job.renamed > 0 && (
+            <span className="text-xs text-emerald-600 font-semibold">✅ {job.renamed} done</span>
           )}
+          {job.failed > 0 && <span className="text-xs text-red-600 font-semibold">❌ {job.failed} failed</span>}
         </div>
         {!ready && job.status === "idle" && (
           <p className="text-sm text-amber-600 font-medium">⚠️ Complete Setup + File Mapping tabs first</p>
         )}
       </div>
 
-      {/* Progress */}
-      {job.status !== "idle" && (
-        <ProgressBar value={job.progress} max={job.total} />
-      )}
+      {job.status !== "idle" && <ProgressBar value={job.progress} max={job.total} />}
 
-      {/* OTP Input */}
+      {/* OTP */}
       {job.needsOtp && (
         <div className="rounded-xl border-2 border-violet-300 bg-violet-50 p-5">
           <p className="font-bold text-violet-800 text-base mb-1">📱 OTP Required</p>
-          <p className="text-sm text-violet-700 mb-3">
-            Telegram has sent a verification code to your app. Enter it below to continue.
-          </p>
+          <p className="text-sm text-violet-700 mb-3">Telegram has sent a verification code to your app. Enter it below.</p>
           <div className="flex gap-3">
-            <input
-              type="text"
-              value={otp}
-              onChange={e => setOtp(e.target.value)}
-              placeholder="Enter OTP code..."
+            <input type="text" value={otp} onChange={e => setOtp(e.target.value)} placeholder="Enter OTP code..."
               className="flex-1 rounded-lg border-2 border-violet-300 px-4 py-2 text-lg font-mono text-center focus:outline-none focus:border-violet-500"
-              onKeyDown={e => e.key === "Enter" && onSubmitOtp()}
-            />
-            <button
-              onClick={onSubmitOtp}
-              className="rounded-lg bg-violet-600 text-white px-5 py-2 font-semibold hover:bg-violet-700 transition-all"
-            >
-              Submit →
-            </button>
+              onKeyDown={e => e.key === "Enter" && onSubmitOtp()} />
+            <button onClick={onSubmitOtp} className="rounded-lg bg-violet-600 text-white px-5 py-2 font-semibold hover:bg-violet-700 transition-all">Submit →</button>
           </div>
         </div>
       )}
 
-      {/* Session string display */}
+      {/* Session string after done */}
       {job.sessionString && job.status === "done" && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
           <div className="flex items-center justify-between mb-2">
-            <p className="font-semibold text-emerald-800 text-sm">💾 Save Your Session String</p>
+            <p className="font-semibold text-emerald-800 text-sm">💾 Save Your Session String — Skip OTP Next Time!</p>
             <CopyBtn text={job.sessionString} label="Copy Session" />
           </div>
-          <p className="text-xs text-emerald-700 mb-2">
-            Paste this in the <strong>Session String</strong> field in Setup tab next time to skip OTP!
-          </p>
-          <textarea
-            readOnly
-            value={job.sessionString}
-            rows={3}
-            className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-mono resize-none"
-          />
+          <textarea readOnly value={job.sessionString} rows={3}
+            className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-xs font-mono resize-none" />
+        </div>
+      )}
+
+      {/* Done summary */}
+      {job.status === "done" && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 grid grid-cols-3 gap-3 text-center">
+          <div className="rounded-lg bg-emerald-100 p-3">
+            <div className="text-2xl font-bold text-emerald-700">{job.renamed}</div>
+            <div className="text-xs text-emerald-600 font-semibold mt-1">✅ Renamed</div>
+          </div>
+          <div className="rounded-lg bg-red-50 p-3">
+            <div className="text-2xl font-bold text-red-600">{job.failed}</div>
+            <div className="text-xs text-red-500 font-semibold mt-1">❌ Failed</div>
+          </div>
+          <div className="rounded-lg bg-amber-50 p-3">
+            <div className="text-2xl font-bold text-amber-600">{job.notFound}</div>
+            <div className="text-xs text-amber-500 font-semibold mt-1">⚠️ Not Found</div>
+          </div>
         </div>
       )}
 
@@ -521,101 +401,69 @@ function RunTab({
         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 space-y-3">
           <p className="font-bold">❌ Error Details</p>
           <code className="block text-xs font-mono break-all bg-red-100 rounded p-2">{job.error}</code>
-
-          {/* Channel ID specific help */}
-          {/* Not-found help */}
-          {job.status === "error" && job.logs.some(l => l.includes("Zero files matched")) && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
-              <p className="font-bold text-amber-800 text-sm">💡 Zero Files Matched — How to Fix</p>
-              <div className="text-xs text-amber-800 space-y-1">
-                <p>The fuzzy scanner tried 3 matching strategies but found nothing:</p>
-                <div className="bg-amber-100 rounded p-2 space-y-1">
-                  <p>1. <strong>Long-press</strong> the file in Telegram → ⋮ → <strong>File Info</strong></p>
-                  <p>2. Copy the <strong>exact filename</strong> as shown there</p>
-                  <p>3. Paste it into the <strong>Old Filenames</strong> column in File Mapping tab</p>
-                </div>
+          {(job.error.includes("entity") || job.error.includes("channel") || job.error.includes("Cannot find")) && (
+            <div className="rounded-lg border border-red-300 bg-white p-3 space-y-2">
+              <p className="font-bold text-red-800">🔧 Channel ID Fix</p>
+              <div className="text-xs text-red-700 space-y-1">
+                <p>1. Forward ANY message from your channel to <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline font-bold">@userinfobot</a></p>
+                <p>2. It replies with the exact Chat ID: <code className="font-mono">-1003557121488</code></p>
+                <p>3. Paste that exact number (with -100 prefix) into the channel field</p>
+                <p>4. Make sure you have <strong>JOINED</strong> the channel in Telegram first</p>
               </div>
             </div>
           )}
-
-          {(job.error.includes("entity") || job.error.includes("channel") || job.error.includes("Cannot find")) && (
-            <div className="rounded-lg border border-red-300 bg-white p-3 space-y-2">
-              <p className="font-bold text-red-800">🔧 Channel ID Fix Guide</p>
-              <div className="space-y-1.5 text-xs text-red-700">
-                <p>The channel ID you entered could not be resolved. Try these steps:</p>
-                <div className="bg-red-50 rounded p-2 space-y-1 font-mono">
-                  <p className="font-sans font-semibold">Option 1 — Use @username:</p>
-                  <p>@animesaga_channel</p>
-                </div>
-                <div className="bg-red-50 rounded p-2 space-y-1 font-mono">
-                  <p className="font-sans font-semibold">Option 2 — Get exact numeric ID:</p>
-                  <p className="font-sans">1. Open Telegram → go to the channel</p>
-                  <p className="font-sans">2. Forward ANY message to <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline font-bold">@userinfobot</a></p>
-                  <p className="font-sans">3. It replies with the exact Chat ID like: <span className="font-mono">-1003557121488</span></p>
-                  <p className="font-sans">4. Paste that exact number (with -100 prefix)</p>
-                </div>
-                <div className="bg-red-50 rounded p-2 space-y-1">
-                  <p className="font-semibold">Option 3 — Use t.me link:</p>
-                  <p className="font-mono">t.me/channelname</p>
-                </div>
-                <p className="font-semibold text-red-800">⚠️ Also make sure you have JOINED the channel in your Telegram app before running!</p>
-              </div>
+          {job.error.includes("MemoryError") && (
+            <div className="rounded-lg border border-orange-300 bg-orange-50 p-3 text-xs text-orange-800">
+              <p className="font-bold mb-1">💥 Out of Memory</p>
+              <p>Even with 512KB chunking, a very large file can still OOM on free tier (512MB RAM). Upgrade to Render <strong>Starter ($7/mo)</strong> for 2GB RAM + bigger /tmp disk.</p>
             </div>
           )}
         </div>
       )}
 
-      {/* Fuzzy match legend — shown during scan/renaming */}
+      {/* Fuzzy legend */}
       {(job.status === "scanning" || job.status === "renaming") && (
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-xs font-bold text-slate-600 mb-2">🔍 Fuzzy Match Legend</p>
-          <div className="flex flex-wrap gap-3 text-xs">
-            <span className="flex items-center gap-1.5 rounded-lg bg-emerald-100 text-emerald-700 px-2 py-1 font-semibold">
-              🎯 Exact — perfect filename match
-            </span>
-            <span className="flex items-center gap-1.5 rounded-lg bg-cyan-100 text-cyan-700 px-2 py-1 font-semibold">
-              🔤 Normalized — ignores case/brackets/spaces
-            </span>
-            <span className="flex items-center gap-1.5 rounded-lg bg-purple-100 text-purple-700 px-2 py-1 font-semibold">
-              🔢 Episode# — matched by episode number only
-            </span>
+          <p className="text-xs font-bold text-slate-600 mb-2">🔍 Match Legend</p>
+          <div className="flex flex-wrap gap-2 text-xs">
+            {[
+              { icon: "🎯", label: "Exact match", color: "bg-emerald-100 text-emerald-700" },
+              { icon: "🔤", label: "Normalized (ignores case/brackets)", color: "bg-cyan-100 text-cyan-700" },
+              { icon: "🔢", label: "Episode# match", color: "bg-purple-100 text-purple-700" },
+            ].map(({ icon, label, color }) => (
+              <span key={icon} className={cn("flex items-center gap-1.5 rounded-lg px-2 py-1 font-semibold", color)}>
+                {icon} {label}
+              </span>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Live Logs */}
+      {/* Logs */}
       <div>
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm font-semibold text-slate-700">📜 Live Logs</p>
-          {job.logs.length > 0 && (
-            <CopyBtn text={job.logs.join("\n")} label="Copy Logs" />
-          )}
+          {job.logs.length > 0 && <CopyBtn text={job.logs.join("\n")} label="Copy Logs" />}
         </div>
-        <div
-          ref={logsRef}
-          className="rounded-xl bg-slate-900 border border-slate-700 p-4 h-72 overflow-y-auto font-mono text-xs leading-relaxed space-y-0.5"
-        >
+        <div ref={logsRef} className="rounded-xl bg-slate-900 border border-slate-700 p-4 h-96 overflow-y-auto font-mono text-xs leading-relaxed space-y-0.5">
           {job.logs.length === 0 ? (
             <p className="text-slate-500 italic">Logs will appear here when you start the job...</p>
           ) : (
             job.logs.map((log, i) => (
-              <div
-                key={i}
-                className={cn(
-                  "whitespace-pre-wrap",
-                  log.startsWith("✅") ? "text-emerald-400" :
-                  log.startsWith("❌") ? "text-red-400" :
-                  log.startsWith("⚠️") ? "text-amber-400" :
-                  log.startsWith("🎯") ? "text-emerald-300" :
-                  log.startsWith("🔤") ? "text-cyan-400" :
-                  log.startsWith("🔢") ? "text-purple-400" :
-                  log.startsWith("🔍") || log.startsWith("📂") || log.startsWith("📡") ? "text-blue-400" :
-                  log.startsWith("🎉") ? "text-yellow-400" :
-                  log.startsWith("=") || log.startsWith("─") ? "text-violet-400" :
-                  log.startsWith("📊") || log.startsWith("✏️") ? "text-sky-400" :
-                  "text-slate-300"
-                )}
-              >
+              <div key={i} className={cn("whitespace-pre-wrap",
+                log.startsWith("✅") ? "text-emerald-400" :
+                log.startsWith("❌") ? "text-red-400" :
+                log.startsWith("⚠️") ? "text-amber-400" :
+                log.startsWith("🎯") ? "text-emerald-300" :
+                log.startsWith("🔤") ? "text-cyan-400" :
+                log.startsWith("🔢") ? "text-purple-400" :
+                log.includes("MB/s") || log.includes("⬇️") || log.includes("⬆️") ? "text-sky-300" :
+                log.startsWith("🔍") || log.startsWith("📂") || log.startsWith("📡") ? "text-blue-400" :
+                log.startsWith("🎉") ? "text-yellow-400" :
+                log.startsWith("=") || log.startsWith("─") ? "text-violet-400" :
+                log.startsWith("📊") || log.startsWith("✏️") ? "text-sky-400" :
+                "text-slate-300"
+              )}>
                 {log}
               </div>
             ))
@@ -623,14 +471,11 @@ function RunTab({
         </div>
       </div>
 
-      {/* Start Button */}
+      {/* Start button */}
       <div className="flex justify-center pt-2">
         {job.status === "idle" || job.status === "error" || job.status === "done" ? (
-          <button
-            onClick={onStart}
-            disabled={!ready || mappingCount === 0}
-            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white px-10 py-3.5 text-base font-bold shadow-lg hover:from-violet-700 hover:to-blue-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-          >
+          <button onClick={onStart} disabled={!ready || mappingCount === 0}
+            className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-violet-600 to-blue-600 text-white px-10 py-3.5 text-base font-bold shadow-lg hover:from-violet-700 hover:to-blue-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed">
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />
             </svg>
@@ -638,9 +483,12 @@ function RunTab({
             {mappingCount > 0 && <span className="ml-1 opacity-75">({mappingCount} files)</span>}
           </button>
         ) : (
-          <div className="flex items-center gap-3 text-slate-500 text-sm">
-            <div className="h-5 w-5 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-            <span>Job running... do not close this tab</span>
+          <div className="flex flex-col items-center gap-2 text-slate-500 text-sm">
+            <div className="h-6 w-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+            <span>Job running — do not close this tab</span>
+            {job.status === "renaming" && job.renamed > 0 && (
+              <span className="text-xs text-emerald-600 font-semibold">{job.renamed}/{job.total} files done so far...</span>
+            )}
           </div>
         )}
       </div>
@@ -652,27 +500,25 @@ function RunTab({
 function GuideTab() {
   return (
     <div className="space-y-5">
-      {/* How it works */}
       <div className="rounded-xl border border-violet-200 bg-violet-50 p-5 space-y-3">
-        <p className="font-bold text-violet-900 text-base">💡 How does the rename actually work? (v7 — The Truth)</p>
+        <p className="font-bold text-violet-900 text-base">💡 How v8 Chunk-Pipe Streaming Works</p>
 
-        {/* Truth box */}
-        <div className="rounded-lg bg-amber-50 border border-amber-300 p-3 text-sm text-amber-900">
-          <p className="font-bold mb-1">⚠️ The Real Truth About Telegram File Renaming</p>
-          <p>Telegram's MTProto API has <strong>no in-place rename operation</strong>. <code className="bg-amber-100 px-1 rounded">InputMediaDocument</code> does not accept attribute overrides — the server ignores them completely. This is why v4/v5/v6 all failed to rename the file despite appearing to work.</p>
-          <p className="mt-1">All popular Telegram rename bots (<strong>@FileRenameBot</strong>, <strong>@RenameBot</strong>, etc.) actually re-upload the file — they just do it through server RAM so no local disk is used. This is what v7 does.</p>
+        <div className="rounded-lg bg-slate-900 p-3 text-xs font-mono">
+          <p className="text-slate-400 mb-2"># v8 streaming — peak RAM = 1 chunk (512KB) not 1 file (1GB)</p>
+          <p className="text-blue-300">async for chunk in client.iter_download(doc, chunk_size=512KB):</p>
+          <p className="text-emerald-300 ml-4">buffer.write(chunk)  <span className="text-slate-500"># RAM or /tmp depending on size</span></p>
+          <p className="text-yellow-300">await client.send_file(dst, file=buffer, file_name=<span className="text-emerald-300">"NEW_NAME.mkv"</span>)</p>
         </div>
 
-        {/* Flow diagram */}
         <div className="rounded-xl bg-white border border-violet-200 p-4">
-          <p className="text-xs font-bold text-violet-700 mb-3 uppercase tracking-wider">v7 Flow — RAM-Stream Rename</p>
+          <p className="text-xs font-bold text-violet-700 mb-3 uppercase tracking-wider">v8 Flow — Chunk-Pipe Rename</p>
           <div className="flex flex-col gap-2 text-sm">
             {[
-              { icon: "1️⃣", label: "Exhaustive Scan (Paginated)", desc: "Fetches ALL messages in batches of 200 using offset_id pagination — never misses a file even in channels with 1000s of messages" },
-              { icon: "2️⃣", label: "3-Tier Fuzzy Match", desc: "🎯 Exact → 🔤 Normalized (strips [], (), spaces, case) → 🔢 Episode# match. Handles typos and spacing differences automatically" },
-              { icon: "3️⃣", label: "RAM-Stream Download", desc: "File is downloaded from Source channel into io.BytesIO() buffer in server RAM. Zero disk I/O. File never touches the disk." },
-              { icon: "4️⃣", label: "RAM-Stream Upload with NEW Name", desc: "Buffer is uploaded to Destination channel using send_file(file=buffer, file_name=NEW_NAME). The new filename is 100% guaranteed." },
-              { icon: "5️⃣", label: "Delete from Source (optional)", desc: "If enabled, the original message is deleted from the Source channel after successful upload." },
+              { icon: "1️⃣", label: "Exhaustive Scan (Paginated)", desc: "Fetches ALL messages in batches of 200 using offset_id — never misses files in channels with 1000s of messages" },
+              { icon: "2️⃣", label: "3-Tier Fuzzy Match", desc: "🎯 Exact → 🔤 Normalized (strips [], (), spaces, case) → 🔢 Episode# match. Catches typos and spacing differences" },
+              { icon: "3️⃣", label: "Chunk-Pipe Download", desc: "iter_download() yields 512KB chunks. ≤400MB → BytesIO RAM buffer. >400MB → /tmp temp file. Peak RAM = 512KB, not the full file size!" },
+              { icon: "4️⃣", label: "Upload with NEW Filename", desc: "send_file(file=buffer, file_name=NEW_NAME.mkv) — filename 100% applied. Shows real-time MB/s + % progress in logs." },
+              { icon: "5️⃣", label: "Cleanup + Delete Source (optional)", desc: "Temp files deleted from /tmp. Source message deleted if enabled. 5s delay between files to avoid FloodWait." },
             ].map((step, i) => (
               <div key={i} className="flex items-start gap-3 rounded-lg bg-violet-50 p-3">
                 <span className="text-lg flex-shrink-0">{step.icon}</span>
@@ -685,121 +531,65 @@ function GuideTab() {
           </div>
         </div>
 
-        {/* Speed note */}
-        <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800">
-          <p className="font-bold mb-1">⚡ Speed Note</p>
-          <p>Since files are re-uploaded, speed depends on your Render instance's bandwidth and the file sizes. A 1GB episode may take 2–5 minutes. Render's free tier has good bandwidth — typically 50–100 MB/s.</p>
-          <p className="mt-1">Render's <strong>free tier</strong> has a 512 MB RAM limit. For large files, consider upgrading to the <strong>Starter plan ($7/mo)</strong> which has 512 MB–2 GB RAM.</p>
+        <div className="grid gap-2 sm:grid-cols-3 text-xs">
+          <div className="rounded-lg bg-blue-50 border border-blue-200 p-3 text-blue-800">
+            <p className="font-bold mb-1">⚡ Speed</p>
+            <p>Telegram bandwidth: ~20–80 MB/s. A 1GB episode ≈ 3–8 min total (DL+UL). 267 files × avg 500MB ≈ 12–20 hours total.</p>
+          </div>
+          <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-amber-800">
+            <p className="font-bold mb-1">🖥️ RAM Usage</p>
+            <p>≤400MB files: peak 512KB RAM. &gt;400MB files: uses /tmp disk. Render free = 512MB RAM + 512MB disk.</p>
+          </div>
+          <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3 text-emerald-800">
+            <p className="font-bold mb-1">♻️ Resume</p>
+            <p>Save session string after each run. If server restarts, paste it and re-run. Done files are tracked and skipped.</p>
+          </div>
         </div>
       </div>
 
-      {/* Deploy on Render */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-        <p className="font-bold text-slate-800 text-base">🚀 Deploy this app on Render.com (Free)</p>
-        <ol className="space-y-3 text-sm text-slate-700 list-decimal ml-4">
-          <li>Push this entire project folder to a <strong>GitHub repo</strong></li>
-          <li>
-            Go to <a href="https://render.com" target="_blank" rel="noreferrer" className="text-violet-600 underline font-semibold">render.com</a> → New → <strong>Web Service</strong>
-          </li>
-          <li>Connect your GitHub repo</li>
-          <li>Render auto-detects the <code className="bg-slate-100 px-1 rounded">render.yaml</code> and <code className="bg-slate-100 px-1 rounded">Dockerfile</code></li>
-          <li>Click <strong>Deploy</strong> — your app is live in ~3 minutes!</li>
+        <p className="font-bold text-slate-800 text-base">🚀 Deploy on Render.com</p>
+        <ol className="space-y-2 text-sm text-slate-700 list-decimal ml-4">
+          <li>Push this project to a <strong>GitHub repo</strong></li>
+          <li>Go to <a href="https://render.com" target="_blank" rel="noreferrer" className="text-violet-600 underline font-semibold">render.com</a> → New → <strong>Web Service</strong></li>
+          <li>Connect your GitHub repo — Render auto-detects <code className="bg-slate-100 px-1 rounded">render.yaml</code> + <code className="bg-slate-100 px-1 rounded">Dockerfile</code></li>
+          <li>Click <strong>Deploy</strong> — live in ~3 minutes</li>
         </ol>
-        <CodeBlock code="# render.yaml is already included in this project\n# Just push to GitHub and connect to Render!" lang="yaml" />
+        <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+          <p className="font-bold mb-1">💡 Render Plan Recommendation</p>
+          <p><strong>Free tier:</strong> Works for files ≤400MB (RAM streaming) and ≤400MB (disk). 512MB RAM, 512MB disk.</p>
+          <p className="mt-1"><strong>Starter ($7/mo):</strong> 512MB RAM + 10GB disk. Handles any file size safely via /tmp streaming.</p>
+        </div>
       </div>
 
-      {/* Run locally */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-        <p className="font-bold text-slate-800 text-base">🖥️ Run Locally (Alternative)</p>
-        <CodeBlock code={`# 1. Install Python dependencies
-cd backend
-pip install -r requirements.txt
-
-# 2. Build the React frontend
-cd ..
-npm install && npm run build
-
-# 3. Copy built files to backend/static
+        <p className="font-bold text-slate-800 text-base">🖥️ Run Locally</p>
+        <CodeBlock code={`cd backend && pip install -r requirements.txt
+cd .. && npm install && npm run build
 cp -r dist/* backend/static/
-
-# 4. Start the server
-cd backend
-python server.py
+cd backend && python server.py
 # → Open http://localhost:8000`} lang="bash" />
       </div>
 
-      {/* Run with Docker */}
       <div className="rounded-xl border border-slate-200 bg-white p-5 space-y-3">
         <p className="font-bold text-slate-800 text-base">🐳 Run with Docker</p>
-        <CodeBlock code={`# Build the Docker image
-docker build -t tg-renamer .
-
-# Run the container
+        <CodeBlock code={`docker build -t tg-renamer .
 docker run -p 8000:8000 tg-renamer
-
 # → Open http://localhost:8000`} lang="bash" />
       </div>
 
-      {/* FAQ */}
       <div className="space-y-3">
         <p className="font-bold text-slate-800">❓ FAQ</p>
         {[
-          {
-            q: "Is my Telegram account safe?",
-            a: "Yes. The script only reads file messages and re-posts them with new names. It never accesses your private chats. Credentials are used only during the active rename session.",
-          },
-          {
-            q: "Do I need to be an admin of both channels?",
-            a: "You must be a member of the Source channel (to read files). You must be an admin of the Destination channel (to post files). If 'Delete from Source' is ON, you also need admin in the Source channel.",
-          },
-          {
-            q: "Can I use the same channel as source and destination?",
-            a: "Yes! Just enter the same channel for both Source and Destination. The renamed file will appear in the same channel. Enable 'Delete from Source' to remove the old-named file.",
-          },
-          {
-            q: "I get 'Cannot find any entity' error for my channel ID!",
-            a: "This is a channel ID format issue. The server tries 4 resolution strategies automatically. Best fix: forward ANY message from the channel to @userinfobot on Telegram — it replies with the exact Chat ID (e.g. -1003557121488). Use that exact number including the -100 prefix. Alternatively use the @username format.",
-          },
-          {
-            q: "Can I use private channels?",
-            a: "Yes — use the numeric chat ID (e.g. -1003557121488). Forward a message from the channel to @userinfobot to get the exact ID. You must have JOINED the channel in your Telegram app before running the script.",
-          },
-          {
-            q: "120 files showed as 'Not Found' — but they ARE in the channel!",
-            a: "v4 uses a 3-tier fuzzy matcher: (1) Exact match, (2) Normalized match (ignores case, brackets, dashes, spaces), (3) Episode-number match (extracts the episode number and matches by that alone). If all 3 fail, the filename in your mapping list is too different from what Telegram actually stored. Fix: Long-press the file in Telegram → ⋮ → File Info → copy the exact filename shown there, and update your Old Filenames list.",
-          },
-          {
-            q: "Why did it only find 147 of 267 files on the first run?",
-            a: "The old v3 used iter_messages() which can silently stop early in large channels. v4 uses paginated get_messages() with offset_id — it walks the ENTIRE channel history in batches of 200, so no message is ever skipped. It also logs each batch so you can watch the progress.",
-          },
-          {
-            q: "What are the 3 match tiers shown in the scan logs?",
-            a: "🎯 Exact = character-perfect filename match. 🔤 Normalized = match after stripping [], (), -, _, spaces, and lowercasing both sides (catches typos like 'MahabharathaEpisode' vs 'MahabharathamEpisode'). 🔢 Episode# = extracts the episode number (e.g. 48 from 'Episode 48') and matches by number alone — the most tolerant mode.",
-          },
-          {
-            q: "Why were ALL files renamed with the old name in v4/v5/v6?",
-            a: "The root truth: Telegram's MTProto API has NO in-place rename operation. InputMediaDocument does NOT accept attribute overrides — Telegram's server ignores them completely. v4 tried send_file(attributes=[...]) which Telethon silently ignores for Document objects. v5 tried SendMediaRequest(attributes=[...]) which doesn't exist in the schema. v6 tried mutating doc.attributes which Telethon also ignores when converting to InputDocument. The ONLY working method is v7: download to RAM → upload with new file_name. This is what all real rename bots do.",
-          },
-          {
-            q: "Does v7 really download and re-upload the file?",
-            a: "Yes. The file is downloaded to server RAM (io.BytesIO buffer — no disk) and then re-uploaded with the new filename. This is the only way to rename a Telegram file. Popular bots like @FileRenameBot do the exact same thing — they just call it 'rename' because from the user's perspective, no local download/upload happens.",
-          },
-          {
-            q: "What if a file is still not found after all 3 tiers?",
-            a: "Copy the exact filename from Telegram: Long-press the file → ⋮ menu → File Info → filename field. Update your Old Filenames list with that exact text and run the job again. Use the session string so you skip the OTP.",
-          },
-          {
-            q: "What if I get a FloodWaitError?",
-            a: "Telegram's rate limiter kicked in. The script auto-detects the wait time and pauses accordingly. There is a 3s delay between each file to minimize this.",
-          },
-          {
-            q: "How long does it take for 267 files?",
-            a: "Depends on file sizes. If each episode is ~1 GB, expect ~2-5 min per file on Render's free tier. For smaller files (200-500 MB), much faster. The server downloads at Telegram's speed (~50 MB/s) and uploads at the same speed.",
-          },
-          {
-            q: "Do I need to keep the browser open?",
-            a: "Yes — keep the Run tab open while the job is running. The WebSocket streams live logs from the server.",
-          },
+          { q: "Why did v7 crash with 'Uvicorn running' in logs but no files renamed?", a: "v7 loaded the entire file into RAM (io.BytesIO). A 1GB file fills 1GB RAM. Render free tier has 512MB RAM. Server OOM-crashes mid-download, job is lost. v8 streams 512KB at a time — peak RAM is always 512KB regardless of file size." },
+          { q: "The server restarted — do I have to redo everything?", a: "No! Save your session string from the previous run (shown at top of logs). Paste it in Setup tab. Re-run the job. The server will skip all files that were already successfully transferred to the destination channel." },
+          { q: "Files >400MB — do they download to /tmp disk?", a: "Yes. Files >400MB are streamed to a temp file in /tmp to avoid RAM pressure, then uploaded from disk. The temp file is deleted after upload. Render free tier has 512MB disk space. Starter plan has 10GB." },
+          { q: "Why does it still say 'not found' for some files?", a: "The fuzzy matcher tries 3 tiers: (1) exact match, (2) normalized match (ignores case/brackets/spaces), (3) episode number match. If all 3 fail, the filename in your list is too different from what's stored in Telegram. Long-press the file in Telegram → File Info → copy the exact filename shown, update your Old Names list." },
+          { q: "I get 'Cannot find any entity' for my channel ID!", a: "Forward ANY message from the channel to @userinfobot. It replies with the exact Chat ID (e.g. -1003557121488). Paste that exact number. Also make sure you've JOINED the channel in your Telegram app." },
+          { q: "What if I get FloodWaitError?", a: "The script auto-detects the wait time from the error and pauses automatically. There's a 5s delay between each file to minimize rate limiting. For 267 files this adds ~22 minutes of delay but prevents bans." },
+          { q: "How long will 267 files take?", a: "Depends on file sizes. At avg 500MB per episode: download ~10-25s + upload ~10-25s + 5s delay = ~30-60s per file. Total estimate: 2.5–4 hours for all 267 files." },
+          { q: "Is my Telegram account safe?", a: "Yes. The session is used only to read from source and write to destination. Credentials are never stored permanently — only in server RAM during the active session." },
+          { q: "Can source and destination be the same channel?", a: "Yes! Enter the same channel for both. The renamed file appears in the same channel. Enable 'Delete from Source' to remove the old-named version." },
         ].map((item, i) => (
           <div key={i} className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="font-semibold text-slate-800 text-sm mb-1">Q: {item.q}</p>
@@ -808,14 +598,13 @@ docker run -p 8000:8000 tg-renamer
         ))}
       </div>
 
-      {/* Architecture */}
       <div className="rounded-xl border border-slate-200 bg-white p-5">
         <p className="font-bold text-slate-800 text-base mb-3">🏗️ Architecture</p>
         <div className="grid grid-cols-3 gap-3 text-center text-sm">
           {[
             { icon: "🌐", label: "React Frontend", sub: "Vite + Tailwind" },
             { icon: "⚡", label: "FastAPI Backend", sub: "WebSocket + REST" },
-            { icon: "🤖", label: "Telethon", sub: "Telegram MTProto" },
+            { icon: "🤖", label: "Telethon", sub: "MTProto + iter_download" },
           ].map((item, i) => (
             <div key={i} className="rounded-lg bg-slate-50 border border-slate-200 p-3">
               <div className="text-2xl mb-1">{item.icon}</div>
@@ -824,11 +613,9 @@ docker run -p 8000:8000 tg-renamer
             </div>
           ))}
         </div>
-        <div className="mt-3 rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs font-mono text-center text-slate-500">
-          Browser UI → REST/WebSocket → FastAPI → Telethon MTProto<br />
-          → Read from <span className="text-red-600 font-bold">Source Channel</span><br />
-          → Write to <span className="text-emerald-600 font-bold">Destination Channel</span><br />
-          → (Optionally) Delete from Source
+        <div className="mt-3 rounded-lg bg-slate-900 p-3 text-xs font-mono text-center text-slate-400">
+          Browser UI → WebSocket → FastAPI → Telethon → iter_download(512KB chunks)<br />
+          → <span className="text-red-400">Source Channel</span> ──512KB──► buffer ──► <span className="text-emerald-400">Destination Channel</span>
         </div>
       </div>
     </div>
@@ -845,8 +632,6 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 
 export function App() {
   const [activeTab, setActiveTab] = useState<Tab>("setup");
-
-  // Setup state
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
   const [phone, setPhone] = useState("");
@@ -854,22 +639,13 @@ export function App() {
   const [dstChannel, setDstChannel] = useState("");
   const [deleteFromSrc, setDeleteFromSrc] = useState(false);
   const [sessionString, setSessionString] = useState("");
-
-  // Mapping state
   const [oldNames, setOldNames] = useState("");
   const [newNames, setNewNames] = useState("");
-
-  // Run state
   const [otp, setOtp] = useState("");
   const [job, setJob] = useState<JobState>({
-    jobId: null,
-    status: "idle",
-    progress: 0,
-    total: 0,
-    logs: [],
-    error: null,
-    needsOtp: false,
-    sessionString: null,
+    jobId: null, status: "idle", progress: 0, total: 0,
+    logs: [], error: null, needsOtp: false, sessionString: null,
+    renamed: 0, failed: 0, notFound: 0,
   });
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -883,12 +659,10 @@ export function App() {
 
   const ready = Boolean(apiId && apiHash && phone && srcChannel && dstChannel);
 
-  // Connect WebSocket for a job
   const connectWs = useCallback((jobId: string) => {
     const wsUrl = API.replace(/^http/, "ws") + `/ws/${jobId}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
       if (data.type === "log") {
@@ -902,93 +676,51 @@ export function App() {
           needsOtp: data.needs_otp,
           error: data.error,
           sessionString: data.session_string ?? prev.sessionString,
+          renamed: data.renamed ?? prev.renamed,
+          failed: data.failed ?? prev.failed,
+          notFound: data.not_found ?? prev.notFound,
         }));
       }
     };
-
     ws.onerror = () => {
-      setJob(prev => ({
-        ...prev,
-        status: "error",
-        error: "WebSocket connection failed. Is the backend running?",
-      }));
+      setJob(prev => ({ ...prev, status: "error", error: "WebSocket connection failed. Is the backend running?" }));
     };
-
     return ws;
   }, []);
 
   const handleStart = async () => {
     if (!ready || mappings.length === 0) return;
-
-    // Reset job
-    setJob({
-      jobId: null,
-      status: "starting",
-      progress: 0,
-      total: mappings.length,
-      logs: ["🔄 Connecting to server..."],
-      error: null,
-      needsOtp: false,
-      sessionString: null,
-    });
+    setJob({ jobId: null, status: "starting", progress: 0, total: mappings.length, logs: ["🔄 Connecting to server..."], error: null, needsOtp: false, sessionString: null, renamed: 0, failed: 0, notFound: 0 });
     setActiveTab("run");
-
     try {
       const res = await fetch(`${API}/api/start-rename`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_id: apiId,
-          api_hash: apiHash,
-          phone,
-          src_channel: srcChannel,
-          dst_channel: dstChannel,
-          delete_from_src: deleteFromSrc,
-          session_string: sessionString || null,
-          mappings,
-        }),
+        body: JSON.stringify({ api_id: apiId, api_hash: apiHash, phone, src_channel: srcChannel, dst_channel: dstChannel, delete_from_src: deleteFromSrc, session_string: sessionString || null, mappings }),
       });
-
-      if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Server error: ${err}`);
-      }
-
+      if (!res.ok) throw new Error(`Server error: ${await res.text()}`);
       const { job_id } = await res.json();
       setJob(prev => ({ ...prev, jobId: job_id }));
       connectWs(job_id);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      setJob(prev => ({
-        ...prev,
-        status: "error",
-        error: message,
-        logs: [...prev.logs, `❌ Failed to start: ${message}`],
-      }));
+      setJob(prev => ({ ...prev, status: "error", error: message, logs: [...prev.logs, `❌ Failed to start: ${message}`] }));
     }
   };
 
   const handleSubmitOtp = async () => {
     if (!job.jobId || !otp) return;
-    await fetch(`${API}/api/submit-otp`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: job.jobId, otp }),
-    });
+    await fetch(`${API}/api/submit-otp`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ job_id: job.jobId, otp }) });
     setOtp("");
   };
 
-  // Cleanup WS on unmount
-  useEffect(() => {
-    return () => { wsRef.current?.close(); };
-  }, []);
+  useEffect(() => { return () => { wsRef.current?.close(); }; }, []);
 
   const setupDone = Boolean(apiId && apiHash && phone && srcChannel && dstChannel);
   const mappingDone = mappings.length > 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-violet-950">
-      {/* Header */}
       <header className="border-b border-white/10 bg-white/5 backdrop-blur-sm sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-4 py-3 flex items-center gap-3">
           <div className="flex items-center justify-center h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-violet-600 shadow-lg flex-shrink-0">
@@ -997,41 +729,25 @@ export function App() {
             </svg>
           </div>
           <div>
-            <h1 className="text-base font-bold text-white leading-tight">Telegram File Renamer</h1>
-            <p className="text-xs text-slate-400">Batch rename without downloading — powered by Telethon on Render</p>
+            <h1 className="text-base font-bold text-white leading-tight">Telegram File Renamer <span className="text-xs text-violet-300 font-normal ml-1">v8</span></h1>
+            <p className="text-xs text-slate-400">512KB chunk-pipe streaming — no OOM, filename guaranteed, resume support</p>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
-            {mappingDone && (
-              <Badge color="bg-emerald-500/20 text-emerald-300">{mappings.length} files mapped</Badge>
-            )}
-            {job.status !== "idle" && job.status !== "error" && (
-              <Badge color="bg-violet-500/20 text-violet-300">{job.status}</Badge>
-            )}
+            {mappingDone && <Badge color="bg-emerald-500/20 text-emerald-300">{mappings.length} files</Badge>}
+            {job.status !== "idle" && job.status !== "error" && <Badge color="bg-violet-500/20 text-violet-300">{job.status}</Badge>}
+            {job.renamed > 0 && <Badge color="bg-emerald-500/20 text-emerald-300">✅ {job.renamed} done</Badge>}
           </div>
         </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-4 py-8">
-        {/* Tabs */}
         <div className="flex gap-1 rounded-xl bg-white/5 border border-white/10 p-1 mb-6">
           {TABS.map(tab => {
-            const isDone =
-              (tab.id === "setup" && setupDone) ||
-              (tab.id === "mapping" && mappingDone) ||
-              (tab.id === "run" && job.status === "done");
+            const isDone = (tab.id === "setup" && setupDone) || (tab.id === "mapping" && mappingDone) || (tab.id === "run" && job.status === "done");
             return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2.5 px-2 text-sm font-semibold transition-all duration-200",
-                  activeTab === tab.id
-                    ? "bg-white text-violet-700 shadow-sm"
-                    : isDone
-                    ? "text-emerald-400 hover:bg-white/10"
-                    : "text-slate-400 hover:bg-white/10"
-                )}
-              >
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                className={cn("flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2.5 px-2 text-sm font-semibold transition-all duration-200",
+                  activeTab === tab.id ? "bg-white text-violet-700 shadow-sm" : isDone ? "text-emerald-400 hover:bg-white/10" : "text-slate-400 hover:bg-white/10")}>
                 <span>{isDone && activeTab !== tab.id ? "✅" : tab.icon}</span>
                 <span className="hidden sm:inline">{tab.label}</span>
               </button>
@@ -1039,69 +755,38 @@ export function App() {
           })}
         </div>
 
-        {/* Content */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xl p-6">
           {activeTab === "setup" && (
-            <SetupTab
-              apiId={apiId} setApiId={setApiId}
-              apiHash={apiHash} setApiHash={setApiHash}
-              phone={phone} setPhone={setPhone}
-              srcChannel={srcChannel} setSrcChannel={setSrcChannel}
-              dstChannel={dstChannel} setDstChannel={setDstChannel}
-              deleteFromSrc={deleteFromSrc} setDeleteFromSrc={setDeleteFromSrc}
-              sessionString={sessionString} setSessionString={setSessionString}
-            />
+            <SetupTab apiId={apiId} setApiId={setApiId} apiHash={apiHash} setApiHash={setApiHash}
+              phone={phone} setPhone={setPhone} srcChannel={srcChannel} setSrcChannel={setSrcChannel}
+              dstChannel={dstChannel} setDstChannel={setDstChannel} deleteFromSrc={deleteFromSrc}
+              setDeleteFromSrc={setDeleteFromSrc} sessionString={sessionString} setSessionString={setSessionString} />
           )}
-          {activeTab === "mapping" && (
-            <MappingTab
-              oldNames={oldNames} setOldNames={setOldNames}
-              newNames={newNames} setNewNames={setNewNames}
-            />
-          )}
+          {activeTab === "mapping" && <MappingTab oldNames={oldNames} setOldNames={setOldNames} newNames={newNames} setNewNames={setNewNames} />}
           {activeTab === "run" && (
-            <RunTab
-              job={job}
-              mappingCount={mappings.length}
-              ready={ready}
-              onStart={handleStart}
-              onSubmitOtp={handleSubmitOtp}
-              otp={otp}
-              setOtp={setOtp}
-              srcChannel={srcChannel}
-              dstChannel={dstChannel}
-              deleteFromSrc={deleteFromSrc}
-            />
+            <RunTab job={job} mappingCount={mappings.length} ready={ready} onStart={handleStart}
+              onSubmitOtp={handleSubmitOtp} otp={otp} setOtp={setOtp}
+              srcChannel={srcChannel} dstChannel={dstChannel} deleteFromSrc={deleteFromSrc} />
           )}
           {activeTab === "guide" && <GuideTab />}
         </div>
 
-        {/* Next/Prev nav */}
         <div className="flex justify-between mt-4">
-          <button
-            onClick={() => {
-              const idx = TABS.findIndex(t => t.id === activeTab);
-              if (idx > 0) setActiveTab(TABS[idx - 1].id);
-            }}
+          <button onClick={() => { const idx = TABS.findIndex(t => t.id === activeTab); if (idx > 0) setActiveTab(TABS[idx - 1].id); }}
             disabled={activeTab === TABS[0].id}
-            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/10 border border-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-          >
+            className="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/10 border border-white/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed">
             ← Back
           </button>
-          <button
-            onClick={() => {
-              const idx = TABS.findIndex(t => t.id === activeTab);
-              if (idx < TABS.length - 1) setActiveTab(TABS[idx + 1].id);
-            }}
+          <button onClick={() => { const idx = TABS.findIndex(t => t.id === activeTab); if (idx < TABS.length - 1) setActiveTab(TABS[idx + 1].id); }}
             disabled={activeTab === TABS[TABS.length - 1].id}
-            className="flex items-center gap-2 rounded-lg bg-violet-600 text-white px-5 py-2 text-sm font-semibold hover:bg-violet-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-lg"
-          >
+            className="flex items-center gap-2 rounded-lg bg-violet-600 text-white px-5 py-2 text-sm font-semibold hover:bg-violet-500 transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-lg">
             Next →
           </button>
         </div>
       </main>
 
       <footer className="text-center pb-8 text-xs text-slate-500">
-        🔒 Your credentials are only used on this server to run Telethon. Files stream through server RAM — no disk storage used.
+        v8 — 512KB chunk streaming: peak RAM = 512KB per file regardless of file size. Files &gt;400MB stream via /tmp disk. Resume supported via session string.
       </footer>
     </div>
   );
