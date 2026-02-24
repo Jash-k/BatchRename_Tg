@@ -152,10 +152,19 @@ function SetupTab({
               type="text"
               value={srcChannel}
               onChange={e => setSrcChannel(e.target.value)}
-              placeholder="e.g. @animesaga or -100123456789"
-              className="w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400"
+              placeholder="@animesaga  or  -1003557121488  or  t.me/animesaga"
+              className="w-full rounded-lg border border-red-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 font-mono"
             />
-            <p className="mt-2 text-xs text-red-600">Files are <strong>scanned</strong> from here</p>
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-red-600">Files are <strong>scanned</strong> from here</p>
+              <div className="rounded-lg bg-red-100 border border-red-200 px-2 py-1.5 text-xs text-red-700 space-y-0.5">
+                <p className="font-semibold">✅ Accepted formats:</p>
+                <p className="font-mono">@channelname</p>
+                <p className="font-mono">-1003557121488 &nbsp;<span className="font-sans font-normal text-red-500">(numeric ID with -100 prefix)</span></p>
+                <p className="font-mono">t.me/channelname</p>
+                <p className="font-semibold mt-1">💡 Don't know the ID? <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline">Forward a message to @userinfobot</a></p>
+              </div>
+            </div>
           </div>
 
           {/* Destination Channel */}
@@ -168,10 +177,19 @@ function SetupTab({
               type="text"
               value={dstChannel}
               onChange={e => setDstChannel(e.target.value)}
-              placeholder="e.g. @mahabharat_hd or -100987654321"
-              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400"
+              placeholder="@mahabharat_hd  or  -1001234567890  or  t.me/mahabharat"
+              className="w-full rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400 font-mono"
             />
-            <p className="mt-2 text-xs text-emerald-600">Renamed files are <strong>forwarded</strong> here</p>
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-emerald-600">Renamed files are <strong>sent</strong> here</p>
+              <div className="rounded-lg bg-emerald-100 border border-emerald-200 px-2 py-1.5 text-xs text-emerald-700 space-y-0.5">
+                <p className="font-semibold">✅ Accepted formats:</p>
+                <p className="font-mono">@channelname</p>
+                <p className="font-mono">-1001234567890 &nbsp;<span className="font-sans font-normal text-emerald-600">(numeric ID with -100 prefix)</span></p>
+                <p className="font-mono">t.me/channelname</p>
+                <p className="font-semibold mt-1">💡 Must be <strong>admin</strong> of this channel to post files</p>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -478,9 +496,35 @@ function RunTab({
 
       {/* Error */}
       {job.status === "error" && job.error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-          <p className="font-bold mb-1">❌ Error Details</p>
-          <code className="text-xs font-mono break-all">{job.error}</code>
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 space-y-3">
+          <p className="font-bold">❌ Error Details</p>
+          <code className="block text-xs font-mono break-all bg-red-100 rounded p-2">{job.error}</code>
+
+          {/* Channel ID specific help */}
+          {(job.error.includes("entity") || job.error.includes("channel") || job.error.includes("Cannot find")) && (
+            <div className="rounded-lg border border-red-300 bg-white p-3 space-y-2">
+              <p className="font-bold text-red-800">🔧 Channel ID Fix Guide</p>
+              <div className="space-y-1.5 text-xs text-red-700">
+                <p>The channel ID you entered could not be resolved. Try these steps:</p>
+                <div className="bg-red-50 rounded p-2 space-y-1 font-mono">
+                  <p className="font-sans font-semibold">Option 1 — Use @username:</p>
+                  <p>@animesaga_channel</p>
+                </div>
+                <div className="bg-red-50 rounded p-2 space-y-1 font-mono">
+                  <p className="font-sans font-semibold">Option 2 — Get exact numeric ID:</p>
+                  <p className="font-sans">1. Open Telegram → go to the channel</p>
+                  <p className="font-sans">2. Forward ANY message to <a href="https://t.me/userinfobot" target="_blank" rel="noreferrer" className="underline font-bold">@userinfobot</a></p>
+                  <p className="font-sans">3. It replies with the exact Chat ID like: <span className="font-mono">-1003557121488</span></p>
+                  <p className="font-sans">4. Paste that exact number (with -100 prefix)</p>
+                </div>
+                <div className="bg-red-50 rounded p-2 space-y-1">
+                  <p className="font-semibold">Option 3 — Use t.me link:</p>
+                  <p className="font-mono">t.me/channelname</p>
+                </div>
+                <p className="font-semibold text-red-800">⚠️ Also make sure you have JOINED the channel in your Telegram app before running!</p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -645,8 +689,12 @@ docker run -p 8000:8000 tg-renamer
             a: "Yes! Just enter the same channel for both Source and Destination. The renamed file will appear in the same channel. Enable 'Delete from Source' to remove the old-named file.",
           },
           {
+            q: "I get 'Cannot find any entity' error for my channel ID!",
+            a: "This is a channel ID format issue. The server tries 4 resolution strategies automatically. Best fix: forward ANY message from the channel to @userinfobot on Telegram — it replies with the exact Chat ID (e.g. -1003557121488). Use that exact number including the -100 prefix. Alternatively use the @username format.",
+          },
+          {
             q: "Can I use private channels?",
-            a: "Yes — use the numeric chat ID (e.g. -1001234567890). You can find this by forwarding a message from the channel to @userinfobot.",
+            a: "Yes — use the numeric chat ID (e.g. -1003557121488). Forward a message from the channel to @userinfobot to get the exact ID. You must have JOINED the channel in your Telegram app before running the script.",
           },
           {
             q: "What if a file is not found in source?",
