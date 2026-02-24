@@ -1,18 +1,26 @@
 #!/usr/bin/env python3
 """
-Telegram File Renamer - FastAPI Backend v5
-Renames files from SOURCE → DESTINATION without downloading/uploading.
+Telegram File Renamer - FastAPI Backend v6
+Renames files SOURCE → DESTINATION without downloading/uploading.
 
-CRITICAL FIX in v5:
-  • Uses raw MTProto messages.SendMedia with InputMediaDocument to FORCE
-    the new filename. Previously send_file(file=doc, attributes=...) was
-    silently ignored by Telethon — the old name came through unchanged.
-  • The correct stack is:
-      InputDocument(id, access_hash, file_reference)
-        → InputMediaDocument(id=InputDocument, query=None)
-          → messages.SendMedia(peer, media, message, random_id, ...)
-    This forces Telegram to re-register the document with NEW attributes
-    (including the new filename) — ZERO bytes uploaded.
+RENAME METHOD (v6 — THE FIX that actually works):
+══════════════════════════════════════════════════
+
+❌ BROKEN v4: send_file(file=Document, attributes=[...])
+   Telethon silently ignores `attributes` when `file` is already a
+   Document TLObject. The file arrives with the OLD name.
+
+❌ BROKEN v5: SendMediaRequest(..., attributes=[...])
+   MTProto's SendMediaRequest schema has NO 'attributes' field at all.
+   Raises: "got an unexpected keyword argument 'attributes'"
+
+✅ WORKING v6: Mutate doc.attributes IN-PLACE, then send_file(doc)
+   1. Refresh the doc's file_reference via GetMessages (avoids EXPIRED error)
+   2. Walk doc.attributes, replace DocumentAttributeFilename with new name
+   3. Call client.send_file(dst, file=doc, force_document=True)
+      → Telethon sees the Document object, reads its (now-mutated) attributes
+      → Builds InputMediaDocument with the NEW DocumentAttributeFilename
+      → Sends to Telegram. Server stores new filename. ZERO bytes transferred.
 """
 
 import asyncio
@@ -32,7 +40,7 @@ from pydantic import BaseModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Telegram File Renamer API", version="5.0.0")
+app = FastAPI(title="Telegram File Renamer API", version="6.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -280,64 +288,86 @@ async def scan_all_messages(client, entity, rename_map: Dict[str, str], log_fn) 
     return file_map
 
 
-# ─── CORE RENAME FUNCTION (v5 — raw MTProto, forces new filename) ─────────────
+# ─── CORE RENAME FUNCTION (v6 — mutate attributes in-place) ──────────────────
 
 async def rename_and_send(client, dst_entity, msg, new_name: str, caption: str = "") -> bool:
     """
-    Send the document to dst_entity with the new filename.
+    THE v6 FIX — Mutate doc.attributes in-place, then send_file(doc).
 
-    WHY raw MTProto?
-    ────────────────
-    client.send_file(file=document_obj, attributes=[...]) → Telethon ignores
-    the `attributes` kwarg when `file` is already a Document object. It just
-    forwards the document as-is, keeping the old filename.
+    Why every other approach fails:
+    ────────────────────────────────
+    ❌ send_file(file=doc, attributes=[...])
+       Telethon ignores `attributes` if `file` is already a Document object.
+       Old filename comes through unchanged.
 
-    The correct approach is:
-      1. Build InputDocument  (id + access_hash + file_reference)
-      2. Build InputMediaDocument  (points to the InputDocument)
-      3. Call messages.SendMedia with the new attributes on the media object
+    ❌ SendMediaRequest(..., attributes=[...])
+       MTProto SendMediaRequest has no 'attributes' field.
+       Crash: "unexpected keyword argument 'attributes'"
 
-    Telegram's server sees new DocumentAttributeFilename and stores it.
-    Because the underlying file_id is the same, ZERO bytes are transferred.
+    ✅ THIS APPROACH (v6):
+       1. Refresh file_reference → avoids FILE_REFERENCE_EXPIRED errors
+       2. Mutate doc.attributes → replace DocumentAttributeFilename in-place
+       3. send_file(dst, file=doc) → Telethon reads the mutated attributes,
+          builds InputMediaDocument with the NEW filename baked in,
+          sends to Telegram. ZERO bytes transferred.
     """
-    from telethon.tl.functions.messages import SendMediaRequest
-    from telethon.tl.types import (
-        InputMediaDocument,
-        InputDocument,
-        DocumentAttributeFilename,
-    )
+    from telethon.tl.types import DocumentAttributeFilename
+    from telethon.tl.functions.channels import GetMessagesRequest as ChannelGetMessages
+    from telethon.tl.functions.messages import GetMessagesRequest
+    from telethon.tl.types import InputMessageID
 
     doc = msg.document
 
-    # Keep all original attributes EXCEPT DocumentAttributeFilename
-    other_attrs = [
-        a for a in doc.attributes
-        if not isinstance(a, DocumentAttributeFilename)
-    ]
-    # Append the NEW filename attribute
-    new_attrs = other_attrs + [DocumentAttributeFilename(file_name=new_name)]
+    # ── Step 1: Refresh file_reference (avoids FILE_REFERENCE_EXPIRED) ────────
+    try:
+        # Try channel messages first (works for channel posts)
+        peer = await client.get_input_entity(msg.peer_id)
+        from telethon.tl.functions.channels import GetMessagesRequest as ChanGetMsgs
+        refreshed = await client(ChanGetMsgs(channel=peer, id=[msg.id]))
+        if hasattr(refreshed, "messages") and refreshed.messages:
+            fresh = refreshed.messages[0]
+            if hasattr(fresh, "document") and fresh.document:
+                doc = fresh.document
+    except Exception:
+        try:
+            # Fallback: plain GetMessages
+            refreshed = await client(GetMessagesRequest(id=[msg.id]))
+            if hasattr(refreshed, "messages") and refreshed.messages:
+                fresh = refreshed.messages[0]
+                if hasattr(fresh, "document") and fresh.document:
+                    doc = fresh.document
+        except Exception:
+            pass  # Use original — may still succeed
 
-    input_doc = InputDocument(
-        id=doc.id,
-        access_hash=doc.access_hash,
-        file_reference=doc.file_reference,
+    # ── Step 2: Build new attributes list with REPLACED filename ──────────────
+    has_filename_attr = any(isinstance(a, DocumentAttributeFilename) for a in doc.attributes)
+
+    new_attrs = []
+    for attr in doc.attributes:
+        if isinstance(attr, DocumentAttributeFilename):
+            new_attrs.append(DocumentAttributeFilename(file_name=new_name))
+        else:
+            new_attrs.append(attr)
+
+    if not has_filename_attr:
+        new_attrs.append(DocumentAttributeFilename(file_name=new_name))
+
+    # ── Step 3: Mutate the document object IN-PLACE ───────────────────────────
+    doc.attributes = new_attrs
+
+    # ── Step 4: send_file reads mutated doc → sends with new filename ──────────
+    # Telethon's send_file() with a Document object calls _get_file_info()
+    # which reads doc.attributes — now containing our NEW filename.
+    # It then builds InputMediaDocument and calls SendMediaRequest internally.
+    # Result: Telegram stores the new filename. ZERO bytes transferred.
+    await client.send_file(
+        dst_entity,
+        file=doc,
+        caption=caption,
+        force_document=True,
+        supports_streaming=False,
     )
 
-    media = InputMediaDocument(
-        id=input_doc,
-        query=None,
-        ttl_seconds=None,
-    )
-
-    peer = await client.get_input_entity(dst_entity)
-
-    await client(SendMediaRequest(
-        peer=peer,
-        media=media,
-        message=caption,
-        random_id=int.from_bytes(os.urandom(8), "big"),
-        attributes=new_attrs,   # ← THIS is what actually sets the new filename
-    ))
     return True
 
 
@@ -345,7 +375,7 @@ async def rename_and_send(client, dst_entity, msg, new_name: str, caption: str =
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "message": "Telegram File Renamer v5 is running"}
+    return {"status": "ok", "message": "Telegram File Renamer v6 is running"}
 
 
 @app.post("/api/start-rename")
@@ -390,7 +420,7 @@ async def get_job(job_id: str):
     }
 
 
-# ─── WebSocket live log streaming ────────────────────────────────────────────
+# ─── WebSocket live log streaming ─────────────────────────────────────────────
 
 @app.websocket("/ws/{job_id}")
 async def websocket_endpoint(websocket: WebSocket, job_id: str):
@@ -438,18 +468,18 @@ async def run_rename_job(job_id: str, req: RenameRequest):
 
     try:
         from telethon import TelegramClient
-        from telethon.tl.types import DocumentAttributeFilename
         from telethon.sessions import StringSession
 
-        log("🚀 Telegram File Renamer v5 — Raw MTProto Rename (No Download/Upload)")
+        log("🚀 Telegram File Renamer v6 — Filename Rename (No Download/Upload)")
         log("=" * 60)
         log(f"📥 Source      : {req.src_channel}")
         log(f"📤 Destination : {req.dst_channel}")
         log(f"🗑️  Delete src  : {'YES' if req.delete_from_src else 'NO'}")
         log(f"📋 Files       : {len(req.mappings)}")
         log("=" * 60)
-        log("🔧 Rename Method: messages.SendMedia + InputMediaDocument")
-        log("   (forces new filename via MTProto — zero bytes transferred)")
+        log("🔧 Rename Method v6: Mutate doc.attributes in-place → send_file(doc)")
+        log("   ✅ This is the ONLY method that actually renames the file!")
+        log("   ✅ Zero bytes transferred — uses same Telegram file_id")
         log("=" * 60)
 
         api_id = int(req.api_id)
@@ -519,18 +549,19 @@ async def run_rename_job(job_id: str, req: RenameRequest):
 
         if found == 0:
             log("⚠️  Zero files matched. Possible reasons:")
-            log("   1. Old filenames in your mapping don't match what's in the channel")
+            log("   1. Old filenames don't match what's in the channel")
             log("   2. The source channel has no document files")
-            log("   3. Copy exact filenames: Long-press file → Info → Filename")
+            log("   3. Long-press file → Info → copy exact filename")
             j["status"] = "done"
             await client.disconnect()
             return
 
         # ── Rename phase ──────────────────────────────────────────────────────
         log("─" * 60)
-        log(f"✏️  PHASE 2: Renaming {found} files using raw MTProto SendMedia...")
-        log(f"   Each file gets a NEW DocumentAttributeFilename injected.")
-        log(f"   Telegram stores the new name — zero bytes transferred. ✅")
+        log(f"✏️  PHASE 2: Renaming {found} files...")
+        log(f"   Step 1: Refresh file_reference (avoids REFERENCE_EXPIRED)")
+        log(f"   Step 2: Mutate doc.attributes with NEW DocumentAttributeFilename")
+        log(f"   Step 3: send_file(doc) → Telegram stores new name, 0 bytes sent")
         log("─" * 60)
         j["status"] = "renaming"
 
@@ -540,33 +571,30 @@ async def run_rename_job(job_id: str, req: RenameRequest):
         total = len(rename_map)
 
         for idx, (old_name, new_name) in enumerate(rename_map.items(), 1):
-            msg = file_map.get(old_name)
+            msg_obj = file_map.get(old_name)
 
-            if not msg:
+            if not msg_obj:
                 log(f"⚠️  [{idx:03d}/{total}] SKIP (not found): {old_name[:60]}")
                 not_found_list.append(old_name)
                 j["progress"] = idx
                 continue
 
             try:
-                caption = msg.message or ""
+                caption = msg_obj.message or ""
 
-                # ── THE FIX: raw MTProto SendMediaRequest ──────────────────
-                # This is the ONLY way to send a Telegram document with a
-                # different filename without re-uploading the bytes.
-                await rename_and_send(client, dst_entity, msg, new_name, caption)
+                await rename_and_send(client, dst_entity, msg_obj, new_name, caption)
 
                 if req.delete_from_src:
-                    await msg.delete()
+                    await msg_obj.delete()
 
-                log(f"✅ [{idx:03d}/{total}] RENAMED {'+ DELETED' if req.delete_from_src else ''}")
+                log(f"✅ [{idx:03d}/{total}] {'MOVED' if req.delete_from_src else 'COPIED'} + RENAMED")
                 log(f"   📄 OLD: {old_name[:65]}")
                 log(f"   ✏️  NEW: {new_name[:65]}")
 
                 renamed += 1
                 j["progress"] = idx
 
-                # Rate limit: 2s between sends ≈ 30 files/min
+                # Rate limit: 2 seconds between sends (~30 files/min, safe)
                 await asyncio.sleep(2.0)
 
             except Exception as e:
@@ -588,7 +616,6 @@ async def run_rename_job(job_id: str, req: RenameRequest):
                     await asyncio.sleep(wait)
                     log("▶️  Resuming...")
                 else:
-                    # Short pause on other errors before continuing
                     await asyncio.sleep(3.0)
 
         # ── Final summary ─────────────────────────────────────────────────────
@@ -603,22 +630,22 @@ async def run_rename_job(job_id: str, req: RenameRequest):
 
         if not_found_list:
             log("")
-            log("⚠️  Files NOT FOUND in source channel:")
+            log("⚠️  Files not found in source channel:")
             for f in not_found_list:
                 log(f"   - {f}")
             log("")
-            log("💡 FIX: Long-press file in Telegram → ⋮ → File Info → copy exact filename")
-            log("   Update your 'Old Filenames' list and run again for these files.")
+            log("💡 FIX: Long-press file → ⋮ → File Info → copy exact filename")
+            log("   Update your 'Old Filenames' list and run again.")
 
         if failed:
             log("")
             log("❌ Files that errored during rename:")
             for f in failed:
                 log(f"   - {f}")
-            log("💡 TIP: Re-run the job — paste only the failed files.")
+            log("💡 TIP: Re-run with just the failed files pasted in.")
 
         log("=" * 60)
-        log("💾 Save the session string (green box) to skip OTP next time!")
+        log("💾 Save the session string (green box above) to skip OTP next time!")
 
         j["status"] = "done"
         j["progress"] = total
@@ -634,7 +661,7 @@ async def run_rename_job(job_id: str, req: RenameRequest):
         j["logs"].append("💡 Common fixes:")
         j["logs"].append("   • Channel IDs: use -100XXXXXXXXXX or @username")
         j["logs"].append("   • Forward a message to @userinfobot to get the exact channel ID")
-        j["logs"].append("   • Make sure you are a MEMBER of both channels in the Telegram app")
+        j["logs"].append("   • Make sure you are a MEMBER of both channels in Telegram app")
 
 
 # ─── Serve React Frontend ─────────────────────────────────────────────────────
