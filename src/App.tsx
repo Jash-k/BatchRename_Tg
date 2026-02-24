@@ -428,6 +428,25 @@ function RunTab({
 
   return (
     <div className="space-y-5">
+
+      {/* v5 Fix Banner */}
+      <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
+        <p className="font-bold text-emerald-800 text-sm mb-1">🔧 v5 — Filename Rename Fixed (Raw MTProto)</p>
+        <div className="text-xs text-emerald-700 space-y-1">
+          <p>
+            <strong>Root cause of old bug:</strong> <code className="bg-emerald-100 px-1 rounded font-mono">send_file(file=doc, attributes=[new_name])</code> — Telethon silently ignores
+            the <code className="bg-emerald-100 px-1 rounded font-mono">attributes</code> kwarg when passing a Document object. Files arrived with the <strong>old name unchanged</strong>.
+          </p>
+          <p>
+            <strong>Fix:</strong> Now uses raw MTProto <code className="bg-emerald-100 px-1 rounded font-mono">messages.SendMedia</code> →{" "}
+            <code className="bg-emerald-100 px-1 rounded font-mono">InputMediaDocument</code> →{" "}
+            <code className="bg-emerald-100 px-1 rounded font-mono">InputDocument</code> with new{" "}
+            <code className="bg-emerald-100 px-1 rounded font-mono">DocumentAttributeFilename</code> injected.
+            Telegram stores the <strong>new filename</strong> — zero bytes transferred. ✅
+          </p>
+        </div>
+      </div>
+
       {/* Channel flow bar */}
       {channelBar}
 
@@ -501,6 +520,21 @@ function RunTab({
           <code className="block text-xs font-mono break-all bg-red-100 rounded p-2">{job.error}</code>
 
           {/* Channel ID specific help */}
+          {/* Not-found help */}
+          {job.status === "error" && job.logs.some(l => l.includes("Zero files matched")) && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+              <p className="font-bold text-amber-800 text-sm">💡 Zero Files Matched — How to Fix</p>
+              <div className="text-xs text-amber-800 space-y-1">
+                <p>The fuzzy scanner tried 3 matching strategies but found nothing:</p>
+                <div className="bg-amber-100 rounded p-2 space-y-1">
+                  <p>1. <strong>Long-press</strong> the file in Telegram → ⋮ → <strong>File Info</strong></p>
+                  <p>2. Copy the <strong>exact filename</strong> as shown there</p>
+                  <p>3. Paste it into the <strong>Old Filenames</strong> column in File Mapping tab</p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {(job.error.includes("entity") || job.error.includes("channel") || job.error.includes("Cannot find")) && (
             <div className="rounded-lg border border-red-300 bg-white p-3 space-y-2">
               <p className="font-bold text-red-800">🔧 Channel ID Fix Guide</p>
@@ -528,6 +562,24 @@ function RunTab({
         </div>
       )}
 
+      {/* Fuzzy match legend — shown during scan/renaming */}
+      {(job.status === "scanning" || job.status === "renaming") && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-xs font-bold text-slate-600 mb-2">🔍 Fuzzy Match Legend</p>
+          <div className="flex flex-wrap gap-3 text-xs">
+            <span className="flex items-center gap-1.5 rounded-lg bg-emerald-100 text-emerald-700 px-2 py-1 font-semibold">
+              🎯 Exact — perfect filename match
+            </span>
+            <span className="flex items-center gap-1.5 rounded-lg bg-cyan-100 text-cyan-700 px-2 py-1 font-semibold">
+              🔤 Normalized — ignores case/brackets/spaces
+            </span>
+            <span className="flex items-center gap-1.5 rounded-lg bg-purple-100 text-purple-700 px-2 py-1 font-semibold">
+              🔢 Episode# — matched by episode number only
+            </span>
+          </div>
+        </div>
+      )}
+
       {/* Live Logs */}
       <div>
         <div className="flex items-center justify-between mb-2">
@@ -551,9 +603,13 @@ function RunTab({
                   log.startsWith("✅") ? "text-emerald-400" :
                   log.startsWith("❌") ? "text-red-400" :
                   log.startsWith("⚠️") ? "text-amber-400" :
-                  log.startsWith("🔍") || log.startsWith("📂") ? "text-blue-400" :
+                  log.startsWith("🎯") ? "text-emerald-300" :
+                  log.startsWith("🔤") ? "text-cyan-400" :
+                  log.startsWith("🔢") ? "text-purple-400" :
+                  log.startsWith("🔍") || log.startsWith("📂") || log.startsWith("📡") ? "text-blue-400" :
                   log.startsWith("🎉") ? "text-yellow-400" :
-                  log.startsWith("=") ? "text-violet-400" :
+                  log.startsWith("=") || log.startsWith("─") ? "text-violet-400" :
+                  log.startsWith("📊") || log.startsWith("✏️") ? "text-sky-400" :
                   "text-slate-300"
                 )}
               >
@@ -595,23 +651,26 @@ function GuideTab() {
     <div className="space-y-5">
       {/* How it works */}
       <div className="rounded-xl border border-violet-200 bg-violet-50 p-5 space-y-3">
-        <p className="font-bold text-violet-900 text-base">💡 How does rename work without downloading?</p>
+        <p className="font-bold text-violet-900 text-base">💡 How does rename work without downloading? (v5)</p>
+        <div className="rounded-lg bg-red-50 border border-red-200 p-3 text-sm text-red-800 font-semibold">
+          🔧 v5 Critical Fix: Previous versions called <code className="bg-red-100 px-1 rounded">send_file(file=doc, attributes=[...])</code> — but Telethon <strong>silently ignores</strong> the <code className="bg-red-100 px-1 rounded">attributes</code> kwarg when the file is already a Document object. The file arrived with the <strong>old name unchanged</strong>.
+        </div>
         <p className="text-sm text-violet-800">
-          Telegram stores files by <strong>file_id</strong> (a content hash). When Telethon calls{" "}
-          <code className="bg-violet-200 px-1 rounded">send_file()</code> with an existing{" "}
-          <code className="bg-violet-200 px-1 rounded">document</code> object and <em>new</em> filename
-          attributes, Telegram creates a new message referencing the same stored bytes —{" "}
-          <strong>zero bytes downloaded or uploaded</strong>. This is exactly how bots like @FileRenameBot work.
+          v5 uses the <strong>raw MTProto API</strong>: <code className="bg-violet-200 px-1 rounded">messages.SendMedia</code> with{" "}
+          <code className="bg-violet-200 px-1 rounded">InputMediaDocument</code> +{" "}
+          <code className="bg-violet-200 px-1 rounded">InputDocument</code> and a freshly injected{" "}
+          <code className="bg-violet-200 px-1 rounded">DocumentAttributeFilename</code>. Telegram's server registers the document under the new name while reusing the same stored bytes —{" "}
+          <strong>zero bytes downloaded or uploaded</strong>.
         </p>
         {/* Flow diagram */}
         <div className="rounded-xl bg-white border border-violet-200 p-4">
-          <p className="text-xs font-bold text-violet-700 mb-3 uppercase tracking-wider">How the flow works</p>
+          <p className="text-xs font-bold text-violet-700 mb-3 uppercase tracking-wider">How the flow works (v5 — Raw MTProto)</p>
           <div className="flex flex-col gap-2 text-sm">
             {[
-              { icon: "1️⃣", label: "Scan Source", desc: "Telethon reads message list from Source channel — no file data downloaded" },
-              { icon: "2️⃣", label: "Match Filenames", desc: "Matches each old filename in your mapping list against scanned messages" },
-              { icon: "3️⃣", label: "send_file() to Destination", desc: "Sends the document object (by file_id) to Destination with new filename — 0 bytes transferred" },
-              { icon: "4️⃣", label: "Delete from Source (optional)", desc: "If enabled, deletes the original message from Source channel" },
+              { icon: "1️⃣", label: "Exhaustive Scan (Paginated)", desc: "Fetches ALL messages in batches of 200 using offset_id — never misses a file even in huge channels" },
+              { icon: "2️⃣", label: "3-Tier Fuzzy Match", desc: "🎯 Exact → 🔤 Normalized (strips [], (), spaces, case) → 🔢 Episode# match. Catches typos like 'MahabharathaEpisode' vs 'MahabharathamEpisode'" },
+              { icon: "3️⃣", label: "Raw MTProto SendMedia (v5 FIX)", desc: "Uses messages.SendMedia + InputMediaDocument + InputDocument with NEW DocumentAttributeFilename injected. This FORCES the new filename — send_file(attributes=...) was silently ignored by Telethon before." },
+              { icon: "4️⃣", label: "Delete from Source (optional)", desc: "If enabled, deletes the original message from Source channel after successful copy" },
             ].map((step, i) => (
               <div key={i} className="flex items-start gap-3 rounded-lg bg-violet-50 p-3">
                 <span className="text-lg flex-shrink-0">{step.icon}</span>
@@ -697,8 +756,24 @@ docker run -p 8000:8000 tg-renamer
             a: "Yes — use the numeric chat ID (e.g. -1003557121488). Forward a message from the channel to @userinfobot to get the exact ID. You must have JOINED the channel in your Telegram app before running the script.",
           },
           {
-            q: "What if a file is not found in source?",
-            a: "The script logs it as NOT FOUND and continues. Make sure filenames are exact (case-sensitive, spaces, special characters included).",
+            q: "120 files showed as 'Not Found' — but they ARE in the channel!",
+            a: "v4 uses a 3-tier fuzzy matcher: (1) Exact match, (2) Normalized match (ignores case, brackets, dashes, spaces), (3) Episode-number match (extracts the episode number and matches by that alone). If all 3 fail, the filename in your mapping list is too different from what Telegram actually stored. Fix: Long-press the file in Telegram → ⋮ → File Info → copy the exact filename shown there, and update your Old Filenames list.",
+          },
+          {
+            q: "Why did it only find 147 of 267 files on the first run?",
+            a: "The old v3 used iter_messages() which can silently stop early in large channels. v4 uses paginated get_messages() with offset_id — it walks the ENTIRE channel history in batches of 200, so no message is ever skipped. It also logs each batch so you can watch the progress.",
+          },
+          {
+            q: "What are the 3 match tiers shown in the scan logs?",
+            a: "🎯 Exact = character-perfect filename match. 🔤 Normalized = match after stripping [], (), -, _, spaces, and lowercasing both sides (catches typos like 'MahabharathaEpisode' vs 'MahabharathamEpisode'). 🔢 Episode# = extracts the episode number (e.g. 48 from 'Episode 48') and matches by number alone — the most tolerant mode.",
+          },
+          {
+            q: "Why were ALL files renamed with the old name (e.g. [AnimeSaga]- MahabharathamEpisode 249 [AS].mkv)?",
+            a: "This was the v4 bug. send_file(file=document_obj, attributes=[new_name]) — Telethon silently ignores the attributes kwarg when you pass a Document object directly. It just forwards the file as-is with all original attributes. v5 fixes this by using raw MTProto: messages.SendMedia + InputMediaDocument + InputDocument with a freshly constructed DocumentAttributeFilename. Telegram registers the new filename. Zero bytes transferred.",
+          },
+          {
+            q: "What if a file is still not found after all 3 tiers?",
+            a: "Copy the exact filename from Telegram: Long-press the file → ⋮ menu → File Info → filename field. Update your Old Filenames list with that exact text and run the job again. Use the session string so you skip the OTP.",
           },
           {
             q: "What if I get a FloodWaitError?",
