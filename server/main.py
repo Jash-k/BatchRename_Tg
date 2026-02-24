@@ -2,8 +2,9 @@ import os
 import asyncio
 import logging
 from typing import List, Optional
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pyrogram import Client
@@ -61,7 +62,8 @@ async def run_renaming_task(req: StartRequest):
     add_log("Starting renaming task...")
     
     # Create working directory for downloads
-    work_dir = "downloads"
+    # Use /tmp for ephemeral storage on Render/cloud envs
+    work_dir = "/tmp/downloads"
     if not os.path.exists(work_dir):
         os.makedirs(work_dir)
 
@@ -178,6 +180,10 @@ async def run_renaming_task(req: StartRequest):
         if client.is_connected:
             await client.stop()
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.post("/api/start")
 async def start_task(req: StartRequest, background_tasks: BackgroundTasks):
     if state.is_running:
@@ -203,13 +209,30 @@ async def get_status():
         "logs": state.logs[-50:] # Return last 50 logs
     }
 
-# Serve static files (Frontend)
-# We assume 'dist' is one level up or in root depending on where we run main.py
-# If main.py is in /server/, then ../dist is correct.
-if os.path.exists("dist"):
-    app.mount("/", StaticFiles(directory="dist", html=True), name="static")
-elif os.path.exists("../dist"):
-    app.mount("/", StaticFiles(directory="../dist", html=True), name="static")
+# SPA & Static Files Serving
+# Determine where 'dist' is (root or one level up)
+dist_dir = "dist"
+if not os.path.exists(dist_dir) and os.path.exists("../dist"):
+    dist_dir = "../dist"
+
+if os.path.exists(dist_dir):
+    # Mount /assets specifically if it exists to let StaticFiles handle it efficiently
+    assets_dir = os.path.join(dist_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    # Catch-all route for SPA
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        # Check if the file exists in dist (e.g., vite.svg, favicon.ico)
+        file_path = os.path.join(dist_dir, full_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        
+        # Otherwise, return index.html for client-side routing
+        return FileResponse(os.path.join(dist_dir, "index.html"))
+else:
+    logger.warning(f"Dist directory '{dist_dir}' not found. Frontend will not be served.")
 
 if __name__ == "__main__":
     import uvicorn

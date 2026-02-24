@@ -1,36 +1,35 @@
-# ── Stage 1: Build React frontend ──────────────────────────────────────
-FROM node:20-alpine AS frontend-builder
-
-WORKDIR /app/frontend
-
-# Copy frontend package files
-COPY package.json package-lock.json* ./
+# Stage 1: Build React Frontend
+FROM node:18-alpine as build
+WORKDIR /app
+COPY package*.json ./
 RUN npm install
-
-# Copy frontend source
-COPY index.html vite.config.ts tsconfig.json ./
-COPY src ./src
-
-# Build frontend → outputs to /app/frontend/dist
+COPY . .
 RUN npm run build
 
-# ── Stage 2: Python backend + static files ──────────────────────────────
-FROM python:3.11-slim
-
+# Stage 2: Python Backend
+FROM python:3.9-slim
 WORKDIR /app
 
-# Install Python dependencies
-COPY backend/requirements.txt ./requirements.txt
+# Install build dependencies
+RUN apt-get update && apt-get install -y gcc python3-dev && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to cache dependencies
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend
-COPY backend/server.py ./server.py
+# Copy the server code
+COPY server ./server
 
-# Copy built frontend into backend/static (served by FastAPI)
-COPY --from=frontend-builder /app/frontend/dist ./static
+# Copy the built frontend from stage 1 to the current directory's 'dist' folder
+COPY --from=build /app/dist ./dist
 
-# Expose port
+# Environment variables
+ENV PORT=8000
+
+# Expose the port
 EXPOSE 8000
 
-# Start server
-CMD ["python", "server.py"]
+# Run the application
+# We use shell form to allow variable expansion if needed, but array form is safer.
+# Render provides PORT env var, we need to use it.
+CMD ["sh", "-c", "uvicorn server.main:app --host 0.0.0.0 --port $PORT"]
