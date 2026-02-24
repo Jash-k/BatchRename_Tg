@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""
+Telegram File Renamer - FastAPI Backend
+Renames files from SOURCE channel → DESTINATION channel without downloading/uploading.
+Deployed on Render.com.
+"""
+
+import asyncio
+import os
+import uuid
+import logging
+from typing import Dict, List, Optional
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Telegram File Renamer API", version="2.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# In-memory job store
+jobs: Dict[str, dict] = {}
+job_queues: Dict[str, asyncio.Queue] = {}
+
+
+# ─── Pydantic Models ──────────────────────────────────────────────────────────
+
+class RenameRequest(BaseModel):
+    api_id: str
+    api_hash: str
+    phone: str
+    src_channel: str          # Source channel (where files currently live)
+    dst_channel: str          # Destination channel (where renamed files go)
+    delete_from_src: bool = False  # Whether to delete originals from source
+    session_string: Optional[str] = None
+    mappings: List[Dict[str, str]]  # [{"old": "...", "new": "..."}]
+
+
+class OTPRequest(BaseModel):
+    job_id: str
+    otp: str
+
+
+# ─── API Endpoints ────────────────────────────────────────────────────────────
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "message": "Telegram File Renamer v2 is running"}
+
+
+@app.post("/api/start-rename")
+async def start_rename(req: RenameRequest):
+    """Start a rename job. Returns job_id."""
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {
+        "status": "starting",
+        "progress": 0,
+        "total": len(req.mappings),
+        "logs": [],
+        "error": None,
+        "needs_otp": False,
+        "session_string": None,
+    }
+    job_queues[job_id] = asyncio.Queue()
+    asyncio.create_task(run_rename_job(job_id, req))
+    return {"job_id": job_id, "total": len(req.mappings)}
+
+
+@app.post("/api/submit-otp")
+async def submit_otp(data: OTPRequest):
+    """Submit OTP for a job waiting for Telegram authentication."""
+    if data.job_id not in job_queues:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await job_queues[data.job_id].put({"type": "otp", "value": data.otp})
+    return {"ok": True}
+
+
+@app.get("/api/job/{job_id}")
+async def get_job(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    j = jobs[job_id]
+    return {
+        "job_id": job_id,
+        "status": j["status"],
+        "progress": j["progress"],
+        "total": j["total"],
+        "logs": j["logs"][-100:],
+        "error": j["error"],
+        "needs_otp": j["needs_otp"],
+        "session_string": j.get("session_string"),
+    }
+
+
+# ─── WebSocket (live log streaming) ──────────────────────────────────────────
+
+@app.websocket("/ws/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    await websocket.accept()
+    try:
+        last_log_idx = 0
+        while True:
+            if job_id not in jobs:
+                await websocket.send_json({"type": "error", "message": "Job not found"})
+                break
+
+            j = jobs[job_id]
+
+            # Stream any new log lines
+            new_logs = j["logs"][last_log_idx:]
+            for log in new_logs:
+                await websocket.send_json({"type": "log", "message": log})
+            last_log_idx = len(j["logs"])
+
+            # Send status update
+            await websocket.send_json({
+                "type": "status",
+                "status": j["status"],
+                "progress": j["progress"],
+                "total": j["total"],
+                "needs_otp": j["needs_otp"],
+                "session_string": j.get("session_string"),
+                "error": j["error"],
+            })
+
+            if j["status"] in ("done", "error", "cancelled"):
+                break
+
+            await asyncio.sleep(0.8)
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected for job {job_id}")
+
+
+# ─── Core Rename Job ──────────────────────────────────────────────────────────
+
+async def run_rename_job(job_id: str, req: RenameRequest):
+    """
+    Main async worker:
+      1. Login to Telegram (with OTP via WebSocket if needed)
+      2. Scan SOURCE channel for matching filenames
+      3. For each match: send_file() to DESTINATION with new name (no re-upload)
+      4. Optionally delete original from SOURCE
+    """
+    j = jobs[job_id]
+    queue = job_queues[job_id]
+
+    def log(msg: str):
+        j["logs"].append(msg)
+        logger.info(f"[{job_id[:8]}] {msg}")
+
+    try:
+        from telethon import TelegramClient
+        from telethon.tl.types import DocumentAttributeFilename
+        from telethon.sessions import StringSession
+
+        log("🚀 Starting Telegram File Renamer v2...")
+        log(f"📥 Source channel  : {req.src_channel}")
+        log(f"📤 Destination     : {req.dst_channel}")
+        log(f"🗑️  Delete source   : {'YES' if req.delete_from_src else 'NO'}")
+        log(f"📋 Files to rename : {len(req.mappings)}")
+        log("─" * 50)
+
+        api_id = int(req.api_id)
+        api_hash = req.api_hash
+
+        session = StringSession(req.session_string) if req.session_string else StringSession()
+        client = TelegramClient(session, api_id, api_hash)
+
+        # OTP callback — prompts browser UI via WebSocket flag
+        async def otp_callback():
+            j["needs_otp"] = True
+            log("📱 OTP sent to your Telegram app. Enter it in the web UI...")
+            data = await queue.get()
+            j["needs_otp"] = False
+            log("✅ OTP received, authenticating...")
+            return data.get("value", "")
+
+        await client.start(
+            phone=req.phone,
+            code_callback=otp_callback,
+            password=None,
+        )
+
+        # Save session string immediately after login
+        j["session_string"] = client.session.save()
+        log("✅ Logged in to Telegram successfully!")
+
+        # Resolve both channels
+        src_entity = await client.get_entity(req.src_channel)
+        dst_entity = await client.get_entity(req.dst_channel)
+
+        src_name = getattr(src_entity, "title", req.src_channel)
+        dst_name = getattr(dst_entity, "title", req.dst_channel)
+
+        log(f"📥 Source  : {src_name}")
+        log(f"📤 Dest    : {dst_name}")
+        log("🔍 Scanning source channel for matching files...")
+        log("    (This may take 1–2 minutes for large channels)")
+
+        j["status"] = "scanning"
+
+        # Build rename map: old_name → new_name
+        rename_map: Dict[str, str] = {m["old"]: m["new"] for m in req.mappings}
+
+        # Scan source channel messages and collect matching ones
+        file_map: Dict[str, object] = {}  # old_name → message object
+
+        async for msg in client.iter_messages(src_entity, limit=None):
+            if not msg.document:
+                continue
+            for attr in msg.document.attributes:
+                if isinstance(attr, DocumentAttributeFilename):
+                    fname = attr.file_name
+                    if fname in rename_map and fname not in file_map:
+                        file_map[fname] = msg
+                    break
+
+        found = len(file_map)
+        not_found = len(rename_map) - found
+        log(f"✅ Scan complete!")
+        log(f"   Found    : {found} / {len(rename_map)} files")
+        if not_found > 0:
+            log(f"   Missing  : {not_found} files (will be skipped)")
+        log("─" * 50)
+
+        if found == 0:
+            log("⚠️  No matching files found in source channel.")
+            log("   → Check filenames are exact (case-sensitive, spaces included)")
+            j["status"] = "done"
+            await client.disconnect()
+            return
+
+        j["status"] = "renaming"
+        renamed = 0
+        failed: List[str] = []
+        not_found_list: List[str] = []
+
+        for idx, (old_name, new_name) in enumerate(rename_map.items(), 1):
+            msg = file_map.get(old_name)
+
+            if not msg:
+                log(f"⚠️  [{idx:03d}/{len(rename_map)}] NOT FOUND: {old_name}")
+                not_found_list.append(old_name)
+                j["progress"] = idx
+                continue
+
+            try:
+                # Build new attributes — replace only DocumentAttributeFilename
+                new_attrs = []
+                for attr in msg.document.attributes:
+                    if isinstance(attr, DocumentAttributeFilename):
+                        new_attrs.append(DocumentAttributeFilename(file_name=new_name))
+                    else:
+                        new_attrs.append(attr)
+
+                # ── KEY: send_file with existing document — ZERO BYTES transferred ──
+                # Telegram deduplicates by file_id, so this is instant.
+                await client.send_file(
+                    dst_entity,            # ← send to DESTINATION channel
+                    file=msg.document,     # ← reuse existing file (no upload)
+                    attributes=new_attrs,  # ← with the new filename
+                    caption=msg.message or "",
+                    force_document=True,
+                )
+
+                # Delete from source if requested
+                if req.delete_from_src:
+                    await msg.delete()
+                    log(f"✅ [{idx:03d}/{len(rename_map)}] Renamed + deleted from source")
+                else:
+                    log(f"✅ [{idx:03d}/{len(rename_map)}] Renamed → {dst_name}")
+
+                log(f"   📄 {old_name}")
+                log(f"   ✏️  {new_name}")
+
+                renamed += 1
+                j["progress"] = idx
+
+                # Rate limit protection (Telegram allows ~30 msgs/min)
+                await asyncio.sleep(1.5)
+
+            except Exception as e:
+                err_msg = str(e)
+                log(f"❌ [{idx:03d}/{len(rename_map)}] ERROR renaming: {old_name}")
+                log(f"   Reason: {err_msg}")
+                failed.append(old_name)
+                j["progress"] = idx
+
+                # Handle Telegram FloodWait
+                if "FloodWait" in err_msg or "flood" in err_msg.lower():
+                    wait = 30
+                    try:
+                        import re
+                        m = re.search(r"(\d+)", err_msg)
+                        if m:
+                            wait = int(m.group(1)) + 5
+                    except Exception:
+                        pass
+                    log(f"⏳ FloodWait! Pausing {wait}s before continuing...")
+                    await asyncio.sleep(wait)
+
+        # ── Summary ──────────────────────────────────────────────────────────
+        log("─" * 50)
+        log("🎉 RENAME JOB COMPLETE!")
+        log(f"   ✅ Renamed successfully : {renamed}")
+        log(f"   ❌ Errors              : {len(failed)}")
+        log(f"   ⚠️  Not found           : {len(not_found_list)}")
+        log(f"   📥 Source              : {src_name}")
+        log(f"   📤 Destination         : {dst_name}")
+        log(f"   🗑️  Deleted from source  : {'YES' if req.delete_from_src else 'NO'}")
+
+        if failed:
+            log("\n❌ Failed files:")
+            for f in failed:
+                log(f"   - {f}")
+
+        if not_found_list:
+            log("\n⚠️  Not found in source:")
+            for f in not_found_list:
+                log(f"   - {f}")
+
+        log("─" * 50)
+        log("💾 Session string saved — copy it from the green box above!")
+
+        j["status"] = "done"
+        j["progress"] = len(rename_map)
+        await client.disconnect()
+
+    except Exception as e:
+        err = str(e)
+        logger.error(f"Job {job_id} failed: {err}")
+        j["error"] = err
+        j["status"] = "error"
+        j["logs"].append(f"❌ Fatal error: {err}")
+
+
+# ─── Serve React Frontend ─────────────────────────────────────────────────────
+
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        index = os.path.join(static_dir, "index.html")
+        if os.path.exists(index):
+            return FileResponse(index)
+        return {"error": "Frontend not built. Run: npm run build && cp -r dist/* backend/static/"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
